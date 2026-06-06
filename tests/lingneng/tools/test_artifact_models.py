@@ -58,6 +58,39 @@ def test_artifact_sanitizer_strips_unsafe_urls(url):
 
 
 @pytest.mark.parametrize(
+    "url",
+    [
+        "https://files.example.test/%2e%2e/report.pdf",
+        "https://files.example.test/../report.pdf",
+        "https://files.example.test//Users/rotas/report.pdf",
+        "https://files.example.test/%2FUsers%2Frotas%2Freport.pdf",
+    ],
+)
+def test_artifact_sanitizer_strips_unsafe_url_paths(url):
+    sanitized = sanitize_artifact_public_dict({**ARTIFACT, "url": url})
+
+    dumped = json.dumps(sanitized, ensure_ascii=False)
+    assert url not in dumped
+    assert "/Users" not in dumped
+    assert "%2e%2e" not in dumped.lower()
+    assert "../" not in dumped
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized)
+
+
+def test_artifact_sanitizer_keeps_safe_policy_url_path():
+    value = {
+        **ARTIFACT,
+        "url": "https://files.example.test/reports/password-policy.pdf",
+    }
+
+    sanitized = sanitize_artifact_public_dict(value)
+    artifact = artifact_from_public_dict(sanitized)
+
+    assert artifact.url == "https://files.example.test/reports/password-policy.pdf"
+
+
+@pytest.mark.parametrize(
     "object_key",
     [
         "/Users/rotas/secret.pdf",

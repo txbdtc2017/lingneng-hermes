@@ -159,6 +159,13 @@ def _sanitize_public_url(value: Any) -> str | None:
         return None
     if parts.username or parts.password:
         return None
+    decoded_path = unquote(parts.path)
+    if (
+        _CONTROL_CHAR_RE.search(decoded_path)
+        or _has_path_traversal(decoded_path)
+        or _contains_embedded_local_path(decoded_path)
+    ):
+        return None
     if _query_looks_secret(parts.query):
         return urlunsplit((scheme, parts.netloc, parts.path, "", ""))
     return urlunsplit((scheme, parts.netloc, parts.path, parts.query, ""))

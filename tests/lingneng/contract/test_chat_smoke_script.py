@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -71,13 +72,23 @@ def final_frame() -> str:
 
 
 class SmokeServer:
-    def __init__(self, frames: list[str] | None = None, status: int = 200):
+    def __init__(
+        self,
+        frames: list[str] | None = None,
+        status: int = 200,
+        heartbeat_duration_seconds: float | None = None,
+        heartbeat_interval_seconds: float = 0.05,
+    ):
         self.frames = frames or []
         self.status = status
+        self.heartbeat_duration_seconds = heartbeat_duration_seconds
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.requests: list[dict[str, Any]] = []
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.httpd.frames = self.frames  # type: ignore[attr-defined]
         self.httpd.status = self.status  # type: ignore[attr-defined]
+        self.httpd.heartbeat_duration_seconds = heartbeat_duration_seconds  # type: ignore[attr-defined]
+        self.httpd.heartbeat_interval_seconds = heartbeat_interval_seconds  # type: ignore[attr-defined]
         self.httpd.requests = self.requests  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
@@ -120,6 +131,18 @@ class SmokeServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.end_headers()
+                heartbeat_duration = self.server.heartbeat_duration_seconds  # type: ignore[attr-defined]
+                if heartbeat_duration is not None:
+                    deadline = time.monotonic() + heartbeat_duration
+                    interval = self.server.heartbeat_interval_seconds  # type: ignore[attr-defined]
+                    while time.monotonic() < deadline:
+                        try:
+                            self.wfile.write(b": ping\n\n")
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            return
+                        time.sleep(interval)
+                    return
                 for frame in self.server.frames:  # type: ignore[attr-defined]
                     self.wfile.write(frame.encode("utf-8"))
                     self.wfile.flush()
@@ -385,6 +408,17 @@ def test_smoke_script_returns_nonzero_when_stream_ends_before_final() -> None:
     assert result.returncode == 1
     assert_java_payload(server.requests[0], INTERNAL_KEY)
     assert "event_order: run_started,answer_delta" in result.stdout
+    assert_safe_output(result)
+
+
+def test_smoke_script_times_out_when_heartbeat_stream_never_reaches_final() -> None:
+    with SmokeServer(heartbeat_duration_seconds=0.65) as server:
+        result = run_smoke(server.url, timeout_seconds="0.2")
+
+    assert result.returncode == 1
+    assert_java_payload(server.requests[0], INTERNAL_KEY)
+    assert "error: timeout" in result.stderr
+    assert "event_order: none" in result.stdout
     assert_safe_output(result)
 
 

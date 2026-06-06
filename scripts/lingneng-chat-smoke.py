@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -221,13 +222,21 @@ def print_summary(summary: SmokeSummary) -> None:
     print(f"trace_summary_key_count: {summary.trace_summary_key_count}")
 
 
+def check_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise SmokeError("timeout")
+
+
 def run_smoke(args: argparse.Namespace, summary: SmokeSummary) -> None:
+    deadline = time.monotonic() + args.timeout_seconds
     request = build_request(args)
     saw_final = False
 
     try:
+        check_deadline(deadline)
         with urllib.request.urlopen(request, timeout=args.timeout_seconds) as response:
             for frame in iter_sse_frames(response):
+                check_deadline(deadline)
                 parsed = parse_sse_frame(frame)
                 if parsed is None:
                     continue

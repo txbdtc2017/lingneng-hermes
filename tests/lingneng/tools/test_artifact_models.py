@@ -130,6 +130,8 @@ def test_artifact_sanitizer_strips_unsafe_object_keys(object_key):
     [
         ("file=/Users/rotas/report.pdf&download=1", "/Users"),
         ("redirect=https://user:pass@files.example.test/report.pdf", "user:pass"),
+        ("p=..%252Freport.pdf", ".."),
+        ("..%252Freport=1", ".."),
     ],
 )
 def test_artifact_sanitizer_removes_url_query_with_unsafe_value(query, forbidden):
@@ -143,6 +145,15 @@ def test_artifact_sanitizer_removes_url_query_with_unsafe_value(query, forbidden
     dumped = json.dumps(sanitized, ensure_ascii=False)
     assert forbidden not in dumped
     assert query not in dumped
+
+
+def test_artifact_sanitizer_keeps_safe_url_query():
+    value = {**ARTIFACT, "url": "https://files.example.test/report.pdf?download=1"}
+
+    sanitized = sanitize_artifact_public_dict(value)
+    artifact = artifact_from_public_dict(sanitized)
+
+    assert artifact.url == "https://files.example.test/report.pdf?download=1"
 
 
 def test_artifact_sanitizer_keeps_policy_file_names_with_secret_words():
@@ -224,8 +235,10 @@ def test_artifact_sanitizer_strips_local_paths_from_public_strings():
     [
         ("file_name", "report /Users/rotas/secret.pdf", "/Users/rotas"),
         ("file_name", "report C:\\Users\\rotas\\secret.pdf", "C:\\Users"),
+        ("file_name", "..%252Freport.pdf", ".."),
         ("source", "bearer abc123", "bearer"),
         ("source", "document_generation token=abc123", "token"),
+        ("source", "generated ..%252Freport.pdf", ".."),
     ],
 )
 def test_artifact_sanitizer_strips_embedded_local_paths_and_secrets_from_strings(

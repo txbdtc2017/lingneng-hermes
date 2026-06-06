@@ -49,6 +49,7 @@ _SECRET_QUERY_PARTS = (
     "x-amz",
 )
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_PATH_TRAVERSAL_FRAGMENT_RE = re.compile(r"(?:^|[\s/])\.\.?(?:/|$)")
 _LOCAL_ROOT_PATH_FRAGMENT_RE = re.compile(
     r"(?<![A-Za-z0-9._-])[\\/]+(?:Users|home|private|tmp|var|etc|opt|root)\b"
 )
@@ -205,6 +206,7 @@ def _sanitize_public_string(value: str) -> str | None:
         not decode_stable
         or _looks_like_local_path(clean_text)
         or _looks_like_local_path(decoded)
+        or _has_path_traversal(decoded)
         or _contains_embedded_local_path(decoded)
         or _contains_secret_marker(decoded)
     ):
@@ -237,7 +239,9 @@ def _contains_embedded_local_path(value: str) -> bool:
 
 def _has_path_traversal(value: str) -> bool:
     normalized = value.replace("\\", "/")
-    return any(part in {"..", "."} for part in normalized.split("/"))
+    return any(part in {"..", "."} for part in normalized.split("/")) or (
+        _PATH_TRAVERSAL_FRAGMENT_RE.search(normalized) is not None
+    )
 
 
 def _query_looks_secret(query: str) -> bool:
@@ -247,6 +251,7 @@ def _query_looks_secret(query: str) -> bool:
     if (
         not query_stable
         or _CONTROL_CHAR_RE.search(decoded_query)
+        or _has_path_traversal(decoded_query)
         or _contains_embedded_local_path(decoded_query)
         or _contains_url_credentials_fragment(decoded_query)
         or _contains_secret_marker(decoded_query)
@@ -260,6 +265,8 @@ def _query_looks_secret(query: str) -> bool:
             or not value_stable
             or _CONTROL_CHAR_RE.search(decoded_key)
             or _CONTROL_CHAR_RE.search(decoded_value)
+            or _has_path_traversal(decoded_key)
+            or _has_path_traversal(decoded_value)
             or _contains_embedded_local_path(decoded_key)
             or _contains_embedded_local_path(decoded_value)
             or _contains_url_credentials_fragment(decoded_key)

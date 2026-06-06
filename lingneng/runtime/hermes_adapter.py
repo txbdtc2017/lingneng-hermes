@@ -251,8 +251,13 @@ class HermesAgentRunAdapter:
         def run_agent() -> _ThreadResult:
             try:
                 with _without_kanban_worker_env():
-                    history = self.session_store.load_conversation_history(
+                    active_session_id = self.session_store.resolve_active_session_id(
                         resolved_session
+                    )
+                    history = (
+                        self.session_store.load_conversation_history_for_session_id(
+                            active_session_id
+                        )
                     )
                     with lingneng_tool_context(self.settings):
                         _emit_attachment_started(
@@ -273,6 +278,7 @@ class HermesAgentRunAdapter:
                         )
                         agent = self._build_agent(
                             resolved_session,
+                            active_session_id=active_session_id,
                             stream_delta_callback=on_delta,
                             tool_progress_callback=on_tool_progress,
                             ephemeral_system_prompt=ephemeral_system_prompt,
@@ -341,6 +347,7 @@ class HermesAgentRunAdapter:
     def _build_agent(
         self,
         resolved_session: ResolvedSessionKey,
+        active_session_id: str | None = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
         ephemeral_system_prompt: str = "",
@@ -349,7 +356,7 @@ class HermesAgentRunAdapter:
 
         agent = self.agent_cls(
             platform="lingneng",
-            session_id=resolved_session.session_key,
+            session_id=active_session_id or resolved_session.session_key,
             session_db=self.session_store.db,
             ephemeral_system_prompt=ephemeral_system_prompt,
             enabled_toolsets=["lingneng"],

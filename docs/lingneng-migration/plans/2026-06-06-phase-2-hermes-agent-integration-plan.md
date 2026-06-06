@@ -50,6 +50,15 @@ No additional user confirmation is required before Phase 2 execution. The Phase
   `disabled_toolsets=["kanban"]`; the dedicated LingNeng business toolset
   remains Phase 3 work. The kanban disable guard strips worker tools that
   Hermes can inject when `HERMES_KANBAN_TASK` is present.
+- The Hermes adapter clears inherited `HERMES_KANBAN_*` worker environment
+  variables while constructing `AIAgent` and while executing
+  `run_conversation()`, then restores the original values after the run.
+- The Hermes adapter installs a LingNeng-only instance `_touch_activity`
+  tracker so kanban heartbeat side effects do not run during Java API
+  no-tool requests.
+- `lingneng.session` exports `LingNengHermesSessionStore` lazily so fake-mode
+  imports do not load `hermes_state`; direct
+  `lingneng.session.hermes_session` imports remain supported.
 - LingNeng SessionDB data defaults under `LINGNENG_RUNTIME_DIR`.
 - Real model credentials are not required for tests.
 - Docker, Compose, deployment scripts, GitHub Actions workflows, RAG, skills,
@@ -90,6 +99,8 @@ Runtime modules created or modified in Phase 2:
 - `lingneng/session/run_store.py`: expose lookup by `(session_key, request_id)`
   or equivalent data already returned by `reserve_run`; preserve terminal
   answer/artifacts/error fields.
+- `lingneng/session/__init__.py`: keep lightweight key exports eager and expose
+  `LingNengHermesSessionStore` lazily through `__getattr__`.
 - `lingneng/session/hermes_session.py`: construct LingNeng-owned `SessionDB`
   and convert stored rows into `conversation_history`.
 - `lingneng/runtime/__init__.py`: export `HermesAgentRunAdapter`.
@@ -652,17 +663,26 @@ class LingNengHermesSessionStore:
 Modify `lingneng/session/__init__.py`:
 
 ```python
-from lingneng.session.hermes_session import LingNengHermesSessionStore
+from typing import TYPE_CHECKING, Any
+
 from lingneng.session.keys import ResolvedSessionKey, resolve_session_key
-from lingneng.session.run_store import LingNengRunStore, RunStatus
+
+if TYPE_CHECKING:
+    from lingneng.session.hermes_session import LingNengHermesSessionStore
 
 __all__ = [
     "LingNengHermesSessionStore",
-    "LingNengRunStore",
     "ResolvedSessionKey",
-    "RunStatus",
     "resolve_session_key",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "LingNengHermesSessionStore":
+        from lingneng.session.hermes_session import LingNengHermesSessionStore
+
+        return LingNengHermesSessionStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 ```
 
 - [ ] **Step 5: Run focused test and confirm pass**
@@ -712,7 +732,9 @@ key or run store tests.
 - [ ] **Step 1: Reload durable context**
 
 Run the reload commands from Task 2.1 Step 1. Confirm `enabled_toolsets=[]`
-plus `disabled_toolsets=["kanban"]` is the accepted Phase 2 no-tool boundary.
+plus `disabled_toolsets=["kanban"]` is the accepted Phase 2 no-tool boundary,
+and confirm the final review requirement to isolate inherited
+`HERMES_KANBAN_*` worker environment and kanban heartbeat side effects.
 
 - [ ] **Step 2: Extend failing adapter construction tests**
 
@@ -824,11 +846,79 @@ async def test_hermes_adapter_excludes_env_injected_kanban_tools(tmp_path, monke
     tool_names = [tool["function"]["name"] for tool in definitions]
 
     assert all(not name.startswith("kanban_") for name in tool_names)
+
+
+class KanbanEnvProbeAgent:
+    seen_in_init: str | None = None
+    seen_in_run: str | None = None
+
+    def __init__(self, **kwargs):
+        import os
+
+        KanbanEnvProbeAgent.seen_in_init = os.environ.get("HERMES_KANBAN_TASK")
+
+    def run_conversation(self, *args, **kwargs):
+        import os
+
+        KanbanEnvProbeAgent.seen_in_run = os.environ.get("HERMES_KANBAN_TASK")
+        return {"final_response": "完成", "messages": []}
+
+
+class SideEffectingActivityAgent:
+    def __init__(self, **kwargs):
+        self._last_activity_ts = 0.0
+        self._last_activity_desc = ""
+
+    def _touch_activity(self, desc: str) -> None:
+        raise AssertionError(f"kanban side effect inherited: {desc}")
+
+    def run_conversation(self, *args, **kwargs):
+        self._touch_activity("probe")
+        return {"final_response": "完成", "messages": []}
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_clears_kanban_worker_env_during_agent_run(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=KanbanEnvProbeAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert KanbanEnvProbeAgent.seen_in_init is None
+    assert KanbanEnvProbeAgent.seen_in_run is None
+    assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_installs_lingneng_activity_tracker(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=SideEffectingActivityAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    agent = adapter._last_agent_for_tests
+    assert agent._last_activity_desc == "probe"
+    assert agent._last_activity_ts > 0.0
 ```
 
 Expected initial failure: adapter does not accept `settings` or `agent_cls`,
 does not construct `AIAgent`, has no test inspection hook, or does not strip
-env-injected kanban tools from the no-tool boundary.
+env-injected kanban tools from the no-tool boundary. The final review
+regressions also fail until the adapter clears inherited `HERMES_KANBAN_*`
+variables during construction/run and replaces kanban heartbeat activity
+tracking with a LingNeng-local tracker.
 
 - [ ] **Step 3: Run focused test and confirm failure**
 
@@ -1682,6 +1772,12 @@ Phase 2 is complete only when:
 - `LINGNENG_AGENT_MODE=hermes` selects `HermesAgentRunAdapter`.
 - `HermesAgentRunAdapter` constructs `AIAgent` with no tools and LingNeng
   SessionDB.
+- `HermesAgentRunAdapter` clears inherited `HERMES_KANBAN_*` worker environment
+  during construction/run and restores it afterward.
+- `HermesAgentRunAdapter` installs a LingNeng-only activity tracker so kanban
+  heartbeat side effects do not run.
+- Fake-mode imports do not load `hermes_state`, while
+  `from lingneng.session import LingNengHermesSessionStore` still resolves.
 - Java `history` is not passed to `AIAgent` and not persisted into SessionDB.
 - Hermes deltas become ordered `answer_delta` SSE events.
 - Non-streaming Hermes final answers synthesize one `answer_delta`.

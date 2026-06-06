@@ -111,6 +111,16 @@ contract reference. Do not implement there.
   inject kanban worker tools when `HERMES_KANBAN_TASK` is present, even with
   `enabled_toolsets=[]`, and the disabled-toolset subtraction is the guard that
   strips those env-injected tools from LingNeng no-tool runs.
+- The Hermes adapter must also clear inherited `HERMES_KANBAN_*` worker
+  environment variables while constructing `AIAgent` and while executing
+  `run_conversation()`. The isolated keys include `HERMES_KANBAN_TASK`,
+  `HERMES_KANBAN_BOARD`, `HERMES_KANBAN_DB`, `HERMES_KANBAN_WORKSPACE`, and
+  `HERMES_KANBAN_WORKSPACES_ROOT`; original values must be restored after the
+  LingNeng run finishes.
+- The Hermes adapter must install a LingNeng-only instance activity tracker on
+  the constructed agent so `_touch_activity(desc)` updates
+  `_last_activity_ts` and `_last_activity_desc` without calling the kanban
+  heartbeat bridge.
 - The adapter must pass `platform="lingneng"`, `session_id` equal to the
   resolved session key, `session_db` set to the LingNeng SessionDB, and
   `quiet_mode=True`.
@@ -134,6 +144,11 @@ contract reference. Do not implement there.
   adapter.
 - Automated tests use fake Hermes classes, injected factories, or monkeypatches.
   They must not call a real model provider.
+- `lingneng.session` must export `LingNengHermesSessionStore` lazily through
+  `__getattr__`. Fake-mode imports such as `import lingneng.runtime` must not
+  load `hermes_state` or `run_agent`, while direct imports from
+  `lingneng.session.hermes_session` and lazy package imports from
+  `lingneng.session` must both continue to work.
 
 ## User Confirmations Before Phase 2 Plan
 
@@ -290,6 +305,12 @@ Owns SessionDB construction and conversion between stored Hermes rows and
 This module may import `hermes_state.SessionDB` but must not import FastAPI or
 runtime adapter implementations.
 
+### `lingneng/session/__init__.py`
+
+Owns package-level session exports. `LingNengHermesSessionStore` must be a lazy
+package export so importing fake-mode runtime modules does not load
+`hermes_state`.
+
 ### `lingneng/runtime/hermes_adapter.py`
 
 Owns Hermes `AIAgent` construction, sync-to-async stream bridging, public error
@@ -420,6 +441,14 @@ Phase 2 is complete when:
 - `HermesAgentRunAdapter` passes a LingNeng-owned `SessionDB` into `AIAgent`.
 - `HermesAgentRunAdapter` uses explicit no-tool configuration and does not
   expose Hermes default tools or env-injected kanban worker tools.
+- `HermesAgentRunAdapter` clears inherited `HERMES_KANBAN_*` worker environment
+  variables during `AIAgent` construction and `run_conversation()`, then
+  restores the original environment values.
+- `HermesAgentRunAdapter` installs a LingNeng-only `_touch_activity` tracker so
+  kanban heartbeat side effects do not run during LingNeng Java API requests.
+- `import lingneng.runtime` in fake mode does not load `hermes_state` or
+  `run_agent`, and `from lingneng.session import LingNengHermesSessionStore`
+  still resolves lazily when the real SessionDB adapter is needed.
 - Automated tests prove Java `history` is not passed as `conversation_history`
   and is not appended to SessionDB.
 - Automated tests prove two turns with the same resolved LingNeng session reuse

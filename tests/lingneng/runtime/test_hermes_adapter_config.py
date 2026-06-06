@@ -47,7 +47,7 @@ def test_runtime_package_import_does_not_load_run_agent():
             (
                 "import sys; "
                 "import lingneng.runtime; "
-                "print('run_agent' in sys.modules)"
+                "print('hermes_state' in sys.modules, 'run_agent' in sys.modules)"
             ),
         ],
         check=True,
@@ -55,7 +55,25 @@ def test_runtime_package_import_does_not_load_run_agent():
         text=True,
     )
 
-    assert result.stdout.strip() == "False"
+    assert result.stdout.strip() == "False False"
+
+
+def test_session_package_lazy_hermes_store_export_still_works():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from lingneng.session import LingNengHermesSessionStore; "
+                "print(LingNengHermesSessionStore.__name__)"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "LingNengHermesSessionStore"
 
 
 def test_runtime_package_lazy_hermes_export_still_works():
@@ -99,6 +117,53 @@ class CapturingAgent:
             "task_id": task_id,
             "persist_user_message": persist_user_message,
         }
+        return {"final_response": "完成", "messages": []}
+
+
+class KanbanEnvProbeAgent:
+    seen_in_init: str | None = None
+    seen_in_run: str | None = None
+
+    def __init__(self, **kwargs):
+        import os
+
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        KanbanEnvProbeAgent.seen_in_init = os.environ.get("HERMES_KANBAN_TASK")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        import os
+
+        KanbanEnvProbeAgent.seen_in_run = os.environ.get("HERMES_KANBAN_TASK")
+        return {"final_response": "完成", "messages": []}
+
+
+class SideEffectingActivityAgent:
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        self._last_activity_ts = 0.0
+        self._last_activity_desc = ""
+
+    def _touch_activity(self, desc: str) -> None:
+        raise AssertionError(f"kanban side effect inherited: {desc}")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        self._touch_activity("probe")
         return {"final_response": "完成", "messages": []}
 
 
@@ -180,3 +245,41 @@ async def test_hermes_adapter_excludes_env_injected_kanban_tools(
     tool_names = [tool["function"]["name"] for tool in definitions]
 
     assert all(not name.startswith("kanban_") for name in tool_names)
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_clears_kanban_worker_env_during_agent_run(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    KanbanEnvProbeAgent.seen_in_init = "unset"
+    KanbanEnvProbeAgent.seen_in_run = "unset"
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=KanbanEnvProbeAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert KanbanEnvProbeAgent.seen_in_init is None
+    assert KanbanEnvProbeAgent.seen_in_run is None
+    assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_installs_lingneng_activity_tracker(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=SideEffectingActivityAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    agent = adapter._last_agent_for_tests
+    assert agent._last_activity_desc == "probe"
+    assert agent._last_activity_ts > 0.0

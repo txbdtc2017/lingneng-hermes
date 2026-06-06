@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -17,10 +21,51 @@ from lingneng.session.hermes_session import LingNengHermesSessionStore
 from lingneng.session.keys import ResolvedSessionKey
 
 
+_KANBAN_ENV_KEYS = (
+    "HERMES_KANBAN_TASK",
+    "HERMES_KANBAN_BOARD",
+    "HERMES_KANBAN_DB",
+    "HERMES_KANBAN_WORKSPACE",
+    "HERMES_KANBAN_WORKSPACES_ROOT",
+)
+_KANBAN_ENV_LOCK = threading.RLock()
+
+
 @dataclass(frozen=True)
 class _ThreadResult:
     final_response: str = ""
     error: BaseException | None = None
+
+
+@contextlib.contextmanager
+def _without_kanban_worker_env():
+    if not any(os.environ.get(key) is not None for key in _KANBAN_ENV_KEYS):
+        yield
+        return
+
+    with _KANBAN_ENV_LOCK:
+        saved = {key: os.environ.get(key) for key in _KANBAN_ENV_KEYS}
+        for key in _KANBAN_ENV_KEYS:
+            os.environ.pop(key, None)
+        try:
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def _install_lingneng_activity_tracker(agent: Any) -> None:
+    if not hasattr(agent, "_touch_activity"):
+        return
+
+    def _touch_activity(desc: str) -> None:
+        agent._last_activity_ts = time.time()
+        agent._last_activity_desc = desc
+
+    agent._touch_activity = _touch_activity
 
 
 class HermesAgentRunAdapter:
@@ -61,21 +106,22 @@ class HermesAgentRunAdapter:
 
         def run_agent() -> _ThreadResult:
             try:
-                history = self.session_store.load_conversation_history(
-                    resolved_session
-                )
-                agent = self._build_agent(
-                    resolved_session,
-                    stream_delta_callback=on_delta,
-                )
-                self._last_agent_for_tests = agent
-                result = agent.run_conversation(
-                    request.query.content,
-                    system_message=request.system_prompt.content,
-                    conversation_history=history,
-                    task_id=run_id,
-                    persist_user_message=request.query.content,
-                )
+                with _without_kanban_worker_env():
+                    history = self.session_store.load_conversation_history(
+                        resolved_session
+                    )
+                    agent = self._build_agent(
+                        resolved_session,
+                        stream_delta_callback=on_delta,
+                    )
+                    self._last_agent_for_tests = agent
+                    result = agent.run_conversation(
+                        request.query.content,
+                        system_message=request.system_prompt.content,
+                        conversation_history=history,
+                        task_id=run_id,
+                        persist_user_message=request.query.content,
+                    )
                 return _ThreadResult(
                     final_response=_final_response_from_result(result)
                 )
@@ -108,7 +154,7 @@ class HermesAgentRunAdapter:
         resolved_session: ResolvedSessionKey,
         stream_delta_callback=None,
     ):
-        return self.agent_cls(
+        agent = self.agent_cls(
             platform="lingneng",
             session_id=resolved_session.session_key,
             session_db=self.session_store.db,
@@ -119,6 +165,8 @@ class HermesAgentRunAdapter:
             skip_memory=True,
             stream_delta_callback=stream_delta_callback,
         )
+        _install_lingneng_activity_tracker(agent)
+        return agent
 
 
 def _final_response_from_result(result: Any) -> str:

@@ -37,6 +37,7 @@ _KANBAN_ENV_KEYS = (
     "HERMES_KANBAN_WORKSPACES_ROOT",
 )
 _KANBAN_ENV_LOCK = threading.RLock()
+_KANBAN_ENV_ISOLATION_ACTIVE = False
 _MINIMAL_RAG_GUIDANCE = (
     "## LingNeng RAG Guidance\n"
     "Use retrieve_rag for internal learned business knowledge that needs factual "
@@ -52,8 +53,18 @@ class _ThreadResult:
 
 @contextlib.contextmanager
 def _without_kanban_worker_env():
+    global _KANBAN_ENV_ISOLATION_ACTIVE
+
+    if (
+        not _KANBAN_ENV_ISOLATION_ACTIVE
+        and not any(key in os.environ for key in _KANBAN_ENV_KEYS)
+    ):
+        yield
+        return
+
     with _KANBAN_ENV_LOCK:
         saved = {key: os.environ.get(key) for key in _KANBAN_ENV_KEYS}
+        _KANBAN_ENV_ISOLATION_ACTIVE = True
         for key in _KANBAN_ENV_KEYS:
             os.environ.pop(key, None)
         try:
@@ -64,6 +75,7 @@ def _without_kanban_worker_env():
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+            _KANBAN_ENV_ISOLATION_ACTIVE = False
 
 
 def _install_lingneng_activity_tracker(agent: Any) -> None:
@@ -87,6 +99,7 @@ class HermesAgentRunAdapter:
         self.settings = settings
         self.agent_cls = agent_cls
         self.session_store = session_store or LingNengHermesSessionStore(settings)
+        self.skill_loader = LingNengSkillLoader(settings)
         self._last_agent_for_tests: Any | None = None
 
     async def stream(
@@ -222,7 +235,7 @@ class HermesAgentRunAdapter:
         return agent
 
     def _build_system_message(self, request: ChatStreamRequest) -> str:
-        skill_prompt = _skill_prompt_text(self.settings, request)
+        skill_prompt = _skill_prompt_text(self.skill_loader, request)
         return _compose_system_message(
             request.system_prompt.content,
             skill_prompt,
@@ -248,13 +261,11 @@ def _public_runtime_error(run_id: str, request_id: str) -> ErrorEvent:
 
 
 def _skill_prompt_text(
-    settings: LingNengSettings,
+    skill_loader: LingNengSkillLoader,
     request: ChatStreamRequest,
 ) -> str:
     try:
-        return LingNengSkillLoader(settings).build_prompt_context(
-            request
-        ).to_prompt_text()
+        return skill_loader.build_prompt_context(request).to_prompt_text()
     except Exception:
         return (
             "## LingNeng Skill Context\n\n"

@@ -241,6 +241,47 @@ class ConcurrentKanbanEnvAgent:
         return {"final_response": "second", "messages": []}
 
 
+class ConcurrentNoKanbanEnvAgent:
+    lock = threading.Lock()
+    calls = 0
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls.lock:
+            cls.calls = 0
+        cls.first_started = threading.Event()
+        cls.release_first = threading.Event()
+        cls.second_started = threading.Event()
+
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        with self.lock:
+            type(self).calls += 1
+            call_index = type(self).calls
+
+        if call_index == 1:
+            type(self).first_started.set()
+            if not type(self).release_first.wait(timeout=5):
+                raise AssertionError("first run was not released")
+            return {"final_response": "first", "messages": []}
+
+        type(self).second_started.set()
+        return {"final_response": "second", "messages": []}
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_constructs_agent_with_lingneng_tool_context(
     tmp_path,
@@ -265,6 +306,51 @@ async def test_hermes_adapter_constructs_agent_with_lingneng_tool_context(
     assert kwargs["skip_memory"] is True
     assert kwargs["session_db"].db_path == tmp_path / "sessions.sqlite3"
     assert events[-1].answer == "完成"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_reuses_skill_loader_instance(tmp_path, monkeypatch):
+    class CountingPromptContext:
+        def to_prompt_text(self):
+            return ""
+
+    class CountingSkillLoader:
+        instances = []
+
+        def __init__(self, settings):
+            self.settings = settings
+            self.build_request_ids = []
+            type(self).instances.append(self)
+
+        def build_prompt_context(self, request):
+            self.build_request_ids.append(request.request_id)
+            return CountingPromptContext()
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "LingNengSkillLoader",
+        CountingSkillLoader,
+    )
+    first_request = ChatStreamRequest.model_validate(full_payload())
+    second_payload = full_payload()
+    second_payload["request_id"] = "req-second"
+    second_request = ChatStreamRequest.model_validate(second_payload)
+    resolved = resolve_session_key(first_request)
+
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+
+    assert len(CountingSkillLoader.instances) == 1
+    [event async for event in adapter.stream(first_request, resolved, "run-1")]
+    [event async for event in adapter.stream(second_request, resolved, "run-2")]
+
+    assert len(CountingSkillLoader.instances) == 1
+    assert CountingSkillLoader.instances[0].build_request_ids == [
+        first_request.request_id,
+        second_request.request_id,
+    ]
 
 
 @pytest.mark.asyncio
@@ -467,6 +553,49 @@ async def test_hermes_adapter_clears_kanban_worker_env_during_agent_run(
     assert KanbanEnvProbeAgent.seen_in_init is None
     assert KanbanEnvProbeAgent.seen_in_run is None
     assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_does_not_serialize_runs_when_kanban_env_absent(
+    tmp_path,
+    monkeypatch,
+):
+    for key in hermes_adapter_module._KANBAN_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    ConcurrentNoKanbanEnvAgent.reset()
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    first_runtime_dir = tmp_path / "first"
+    second_runtime_dir = tmp_path / "second"
+    first_runtime_dir.mkdir()
+    second_runtime_dir.mkdir()
+    first_adapter = HermesAgentRunAdapter(
+        settings=settings(first_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentNoKanbanEnvAgent,
+    )
+    second_adapter = HermesAgentRunAdapter(
+        settings=settings(second_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentNoKanbanEnvAgent,
+    )
+
+    async def collect(adapter, run_id):
+        return [event async for event in adapter.stream(request, resolved, run_id)]
+
+    first_task = asyncio.create_task(collect(first_adapter, "run-1"))
+    assert await asyncio.to_thread(
+        ConcurrentNoKanbanEnvAgent.first_started.wait,
+        5,
+    )
+    second_task = asyncio.create_task(collect(second_adapter, "run-2"))
+    second_entered_before_release = await asyncio.to_thread(
+        ConcurrentNoKanbanEnvAgent.second_started.wait,
+        0.5,
+    )
+    ConcurrentNoKanbanEnvAgent.release_first.set()
+    await first_task
+    await second_task
+
+    assert second_entered_before_release is True
 
 
 @pytest.mark.asyncio

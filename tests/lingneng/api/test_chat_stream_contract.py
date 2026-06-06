@@ -1,9 +1,13 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lingneng.api.app import create_app
+from lingneng.api.routes import _adapter_stream
+from lingneng.api.sse import with_heartbeats
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
@@ -12,7 +16,7 @@ from lingneng.schemas.chat_events import (
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
-from lingneng.session.keys import ResolvedSessionKey
+from lingneng.session.keys import ResolvedSessionKey, resolve_session_key
 from lingneng.session.run_store import LingNengRunStore, RunStatus
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
@@ -294,6 +298,26 @@ class MissingTerminalAdapter:
         yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
 
 
+class HangingAfterStartAdapter:
+    def __init__(self) -> None:
+        self.waiting_for_next_frame = asyncio.Event()
+        self.cancelled = False
+
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[RunStartedEvent]:
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        self.waiting_for_next_frame.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 def test_adapter_normal_end_without_terminal_marks_failed_and_closes_with_error(
     tmp_path,
 ):
@@ -324,6 +348,42 @@ def test_adapter_normal_end_without_terminal_marks_failed_and_closes_with_error(
     assert second_frames[0][0] == "error"
     assert second_frames[0][1]["code"] == "REQUEST_ALREADY_COMPLETED"
     assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_while_waiting_for_next_frame_marks_run_failed(
+    tmp_path,
+):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HangingAfterStartAdapter()
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    reservation = store.reserve_run(resolved.session_key, request.request_id)
+    stream = with_heartbeats(
+        _adapter_stream(
+            adapter,
+            store,
+            request,
+            resolved,
+            reservation.record.run_id,
+        ),
+        interval_seconds=60,
+    )
+
+    first_frame = await anext(stream)
+    next_frame_task = asyncio.create_task(anext(stream))
+    await adapter.waiting_for_next_frame.wait()
+    next_frame_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await next_frame_task
+
+    record = store.get_by_run_id(reservation.record.run_id)
+    assert first_frame.startswith("event: run_started\n")
+    assert adapter.cancelled is True
+    assert record is not None
+    assert record.status is RunStatus.FAILED
+    assert record.error_code == "CLIENT_STREAM_CANCELLED"
+    assert record.error_message == "Client disconnected before stream completed"
 
 
 class CountingFinalAdapter:

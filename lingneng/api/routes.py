@@ -104,6 +104,7 @@ async def _adapter_stream(
     run_id: str,
 ) -> AsyncIterator[str]:
     current_run_id = run_id
+    terminal_recorded = False
     try:
         async for event in adapter.stream(request, resolved, run_id):
             if hasattr(event, "run_id"):
@@ -115,6 +116,7 @@ async def _adapter_stream(
                     answer=event.answer,
                     artifacts=event.artifacts,
                 )
+                terminal_recorded = True
                 yield encode_sse("final", event)
                 return
 
@@ -125,6 +127,7 @@ async def _adapter_stream(
                     event.code,
                     event.message,
                 )
+                terminal_recorded = True
                 yield encode_sse("error", event)
                 return
 
@@ -136,6 +139,7 @@ async def _adapter_stream(
             "RUNTIME_ERROR",
             "Agent runtime failed",
         )
+        terminal_recorded = True
         yield _runtime_error_frame(current_run_id, request.request_id)
     except Exception:
         _mark_failed_defensively(
@@ -144,7 +148,16 @@ async def _adapter_stream(
             "RUNTIME_ERROR",
             "Agent runtime failed",
         )
+        terminal_recorded = True
         yield _runtime_error_frame(current_run_id, request.request_id)
+    finally:
+        if not terminal_recorded:
+            _mark_failed_defensively(
+                run_store,
+                current_run_id,
+                "CLIENT_STREAM_CANCELLED",
+                "Client disconnected before stream completed",
+            )
 
 
 async def _parse_chat_request(raw_request: Request) -> ChatStreamRequest:

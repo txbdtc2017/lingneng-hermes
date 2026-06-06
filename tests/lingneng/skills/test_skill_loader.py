@@ -16,6 +16,7 @@ def write_skill(
     employee_type: str | None = None,
     display_name: str | None = None,
     body: str = "## When to Use\n用于测试。\n",
+    schema_version: str = "1.0",
     script_policy: str = "metadata_only",
     status: str = "active",
     resources: dict[str, str] | None = None,
@@ -23,7 +24,7 @@ def write_skill(
     package = root / name
     package.mkdir(parents=True)
     lingneng_lines = [
-        '    schema_version: "1.0"',
+        f'    schema_version: "{schema_version}"',
         f"    kind: {kind}",
         "    source: python",
         f"    status: {status}",
@@ -60,8 +61,8 @@ def write_skill(
 def settings(tmp_path: Path, **overrides) -> LingNengSettings:
     env = {
         "LINGNENG_SKILL_ROOTS": str(tmp_path),
-        "LINGNENG_SKILL_EXCERPT_MAX_CHARS": "120",
-        "LINGNENG_SKILL_PROMPT_MAX_CHARS": "500",
+        "LINGNENG_SKILL_EXCERPT_MAX_CHARS": "500",
+        "LINGNENG_SKILL_PROMPT_MAX_CHARS": "1000",
     }
     env.update(overrides)
     return LingNengSettings.from_env(env)
@@ -125,7 +126,7 @@ def test_large_body_and_resources_are_bounded_manifest_only(tmp_path):
     write_skill(
         tmp_path,
         "marketing-copy-generation",
-        body="## When to Use\n" + ("长内容" * 200),
+        body="## When to Use\n" + ("长内容" * 400),
         resources={"references/playbook.md": "资源正文" * 200},
     )
     loader = LingNengSkillLoader(settings(tmp_path))
@@ -136,7 +137,7 @@ def test_large_body_and_resources_are_bounded_manifest_only(tmp_path):
     assert result.selected_skill is not None
     assert "references/playbook.md" in prompt
     assert "资源正文资源正文资源正文" not in prompt
-    assert len(result.selected_skill.body_excerpt) <= 120
+    assert len(result.selected_skill.body_excerpt) <= 500
     assert result.selected_skill.truncated is True
 
 
@@ -164,6 +165,36 @@ def test_rejects_non_metadata_only_script_policy(tmp_path):
     result = loader.build_prompt_context(request("marketing-copy-generation"))
 
     assert result.selected_skill is None
+    assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
+
+
+def test_rejects_unsupported_lingneng_schema_version(tmp_path):
+    write_skill(
+        tmp_path,
+        "marketing-copy-generation",
+        schema_version="2.0",
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request("marketing-copy-generation"))
+
+    assert result.selected_skill is None
+    assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
+
+
+def test_rejects_employee_base_without_display_name(tmp_path):
+    write_skill(
+        tmp_path,
+        "employee-marketing-content-creator",
+        kind="employee_base",
+        employee_type="marketing_content_creator",
+        display_name=None,
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request())
+
+    assert result.employee_base is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 

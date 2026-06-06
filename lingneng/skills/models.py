@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,7 +43,7 @@ class SkillLifecycle(str, Enum):
 class LingNengSkillMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: str
+    schema_version: Literal["1.0"]
     kind: SkillKind
     source: SkillSource
     status: SkillLifecycle

@@ -144,10 +144,12 @@ class LingNengSkillLoader:
                 "Skill package script_policy must be metadata_only.",
                 package_name=metadata.name,
             )
-        if lingneng.kind is SkillKind.EMPLOYEE_BASE and not lingneng.employee_type:
+        if lingneng.kind is SkillKind.EMPLOYEE_BASE and (
+            not lingneng.employee_type or not lingneng.display_name
+        ):
             raise SkillPackageError(
                 "SKILL_PACKAGE_INVALID",
-                "Employee base skill must declare employee_type.",
+                "Employee base skill must declare employee_type and display_name.",
                 package_name=metadata.name,
             )
         return LoadedSkillPackage(

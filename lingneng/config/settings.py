@@ -49,14 +49,14 @@ class LingNengSettings(BaseModel):
     idempotency_retention_days: int = 7
     heartbeat_interval_seconds: float = 15.0
     skill_roots: list[Path] = Field(default_factory=list)
-    skill_excerpt_max_chars: int = 4000
-    skill_prompt_max_chars: int = 12000
+    skill_excerpt_max_chars: int = Field(default=4000, ge=500)
+    skill_prompt_max_chars: int = Field(default=12000, ge=1000)
     rag_endpoint: str = ""
     rag_api_key: str = Field(default="", repr=False)
-    rag_timeout_seconds: float = 5.0
-    rag_default_top_k: int = 5
-    rag_max_top_k: int = 20
-    rag_context_max_chars: int = 6000
+    rag_timeout_seconds: float = Field(default=5.0, ge=0.1)
+    rag_default_top_k: int = Field(default=5, ge=1)
+    rag_max_top_k: int = Field(default=20, ge=1)
+    rag_context_max_chars: int = Field(default=6000, ge=500)
 
     @model_validator(mode="after")
     def _default_session_db_path(self) -> "LingNengSettings":

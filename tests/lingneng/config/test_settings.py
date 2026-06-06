@@ -201,3 +201,21 @@ def test_ready_summary_hides_rag_api_key(tmp_path):
     assert summary["rag_configured"] is True
     assert "rag_api_key" not in summary
     assert "secret-rag-key" not in repr(summary)
+
+
+@pytest.mark.parametrize(
+    ("env_name", "invalid_value"),
+    [
+        ("LINGNENG_SKILL_EXCERPT_MAX_CHARS", "499"),
+        ("LINGNENG_SKILL_PROMPT_MAX_CHARS", "999"),
+        ("LINGNENG_RAG_TIMEOUT_SECONDS", "0.09"),
+        ("LINGNENG_RAG_DEFAULT_TOP_K", "0"),
+        ("LINGNENG_RAG_MAX_TOP_K", "0"),
+        ("LINGNENG_RAG_CONTEXT_MAX_CHARS", "499"),
+    ],
+)
+def test_skill_and_rag_settings_reject_values_below_spec_minimums(
+    env_name, invalid_value
+):
+    with pytest.raises(ValidationError):
+        LingNengSettings.from_env({env_name: invalid_value})

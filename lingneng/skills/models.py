@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 _SAFE_WARNING_PACKAGE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -64,6 +64,13 @@ class SkillPackageMetadata(BaseModel):
     description: str
     version: str = Field(min_length=1)
     lingneng: LingNengSkillMetadata
+
+    @field_validator("version")
+    @classmethod
+    def version_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("version must not be empty")
+        return value
 
 
 class SkillResource(BaseModel):

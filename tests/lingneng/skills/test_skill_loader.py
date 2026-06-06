@@ -241,6 +241,20 @@ def test_missing_version_package_degrades_without_loading(tmp_path):
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
+def test_whitespace_version_package_degrades_without_loading(tmp_path):
+    write_skill(
+        tmp_path,
+        "marketing-copy-generation",
+        version='"   "',
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request("marketing-copy-generation"))
+
+    assert result.selected_skill is None
+    assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
+
+
 def test_skills_package_import_does_not_load_run_agent():
     result = subprocess.run(
         [

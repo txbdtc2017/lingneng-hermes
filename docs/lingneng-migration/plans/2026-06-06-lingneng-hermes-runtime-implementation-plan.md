@@ -204,7 +204,9 @@ implementing runtime code, running verification, committing, or pushing.
 - Create: `lingneng/__init__.py`
 - Create: `lingneng/config/__init__.py`
 - Create: `lingneng/config/settings.py`
+- Modify: `pyproject.toml`
 - Test: `tests/lingneng/config/test_settings.py`
+- Test: `tests/lingneng/config/test_packaging.py`
 
 - [ ] Write failing tests for default settings:
   - `LINGNENG_API_HOST` defaults to `127.0.0.1` for local runtime safety.
@@ -214,11 +216,13 @@ implementing runtime code, running verification, committing, or pushing.
   - `LINGNENG_ARCHIVED_SESSION_RETENTION_DAYS` defaults to `180`.
   - `LINGNENG_IDEMPOTENCY_RETENTION_DAYS` defaults to `7`.
   - `LINGNENG_INTERNAL_API_KEY` defaults to an empty string and disables auth only for local/dev when explicit config allows it.
-- [ ] Run: `python -m pytest tests/lingneng/config/test_settings.py -q`
-- [ ] Expected: fail because `lingneng.config.settings` does not exist.
+- [ ] Write a failing packaging test that asserts `pyproject.toml` setuptools package discovery includes `lingneng` and `lingneng.*`.
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/config/test_settings.py tests/lingneng/config/test_packaging.py -q`
+- [ ] Expected: fail because `lingneng.config.settings` does not exist and package discovery does not include `lingneng` yet.
 - [ ] Implement a `LingNengSettings` Pydantic model with `from_env()` and path normalization.
+- [ ] Add `lingneng` and `lingneng.*` to `[tool.setuptools.packages.find].include` in `pyproject.toml`.
 - [ ] Keep secrets in env only; do not add secret defaults to docs or code.
-- [ ] Run: `python -m pytest tests/lingneng/config/test_settings.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/config/test_settings.py tests/lingneng/config/test_packaging.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能运行配置`
 - [ ] Push the active branch after the commit succeeds.
@@ -252,11 +256,11 @@ implementing runtime code, running verification, committing, or pushing.
 - [ ] Write a test that accepts `conversationId` as an alias for `conversation_id`.
 - [ ] Write a test that ignores unknown Java fields through `ConfigDict(extra="ignore")`.
 - [ ] Write a test that rejects empty `query.content`.
-- [ ] Run: `python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q`
 - [ ] Expected: fail because the schema module does not exist.
 - [ ] Implement request models matching the LingNengAI reference.
 - [ ] Keep `EmployeeType` limited to known LingNeng employee values.
-- [ ] Run: `python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能请求协议模型`
 - [ ] Push the active branch after the commit succeeds.
@@ -293,11 +297,11 @@ implementing runtime code, running verification, committing, or pushing.
 - [ ] Write failing encoder tests:
   - `encode_sse("answer_delta", {"text": "你好"})` returns `event: answer_delta\ndata: {"text": "你好"}\n\n` with UTF-8-safe JSON.
   - `heartbeat_frame()` returns `: ping\n\n`.
-- [ ] Run: `python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q`
 - [ ] Expected: fail because event schema and SSE encoder do not exist.
 - [ ] Implement Pydantic event models and SSE encoder.
 - [ ] Ensure `data` JSON does not need an `event` field.
-- [ ] Run: `python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能 SSE 协议模型`
 - [ ] Push the active branch after the commit succeeds.
@@ -315,11 +319,11 @@ implementing runtime code, running verification, committing, or pushing.
   - missing conversation id: `tenant:user:employee_id:session_id`
   - missing conversation id emits degradation metadata with reason `conversation_id_missing`.
 - [ ] Write a failing test that `history` size is counted in diagnostics but not returned as context messages.
-- [ ] Run: `python -m pytest tests/lingneng/session/test_session_key_resolver.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/session/test_session_key_resolver.py -q`
 - [ ] Expected: fail because resolver does not exist.
 - [ ] Implement `ResolvedSessionKey` and `resolve_session_key(request)`.
 - [ ] Include `tenant_id`, `user_id`, `conversation_id`, `session_id`, `employee_id`, `employee_type`, and `degraded` fields in the resolved object.
-- [ ] Run: `python -m pytest tests/lingneng/session/test_session_key_resolver.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/session/test_session_key_resolver.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能会话键解析`
 - [ ] Push the active branch after the commit succeeds.
@@ -337,13 +341,13 @@ implementing runtime code, running verification, committing, or pushing.
   - repeated completed request returns the existing run state without creating another row.
   - same `request_id` in a different session creates a separate run.
   - retention cleanup deletes rows older than configured days.
-- [ ] Run: `python -m pytest tests/lingneng/session/test_run_store.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/session/test_run_store.py -q`
 - [ ] Expected: fail because run store does not exist.
 - [ ] Implement SQLite table `lingneng_runs` in a dedicated DB file under `LINGNENG_RUNTIME_DIR`.
 - [ ] Use `(session_key, request_id)` as the unique idempotency boundary.
 - [ ] Store `run_id`, `status`, `answer`, `error_code`, `error_message`, `artifacts_json`, `created_at`, `updated_at`, and `completed_at`.
 - [ ] Leave completed-run SSE replay to Phase 2; Phase 1 route handling may return `REQUEST_ALREADY_COMPLETED` for repeated completed requests and must not invoke the adapter again.
-- [ ] Run: `python -m pytest tests/lingneng/session/test_run_store.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/session/test_run_store.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能请求幂等存储`
 - [ ] Push the active branch after the commit succeeds.
@@ -363,12 +367,12 @@ implementing runtime code, running verification, committing, or pushing.
   - output is an async iterator of LingNeng event models.
   - fake adapter emits `run_started`, one or more `answer_delta`, and `final`.
   - joined `answer_delta.text` equals `final.answer`.
-- [ ] Run: `python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q`
 - [ ] Expected: fail because adapter modules do not exist.
-- [ ] Implement an `AgentRunAdapter` protocol with `stream(request, resolved_session)`.
+- [ ] Implement an `AgentRunAdapter` protocol with `stream(request, resolved_session, run_id)` so the route's reserved run id is the same run id emitted in SSE events and stored for idempotency.
 - [ ] Implement `FakeAgentRunAdapter` for deterministic local tests.
 - [ ] Implement bridge helpers that stamp `request_id`, `run_id`, sequence, and trace metadata.
-- [ ] Run: `python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能 Agent 适配器接口`
 - [ ] Push the active branch after the commit succeeds.
@@ -394,7 +398,7 @@ implementing runtime code, running verification, committing, or pushing.
   - adapter/runtime failure after stream start emits one terminal `error` event with `run_id`, `request_id`, `code`, `message`, `trace_id`, and `recoverable`, and emits no `final`.
   - repeated running `request_id` returns deterministic terminal `error` code `REQUEST_ALREADY_RUNNING` and does not invoke the adapter.
   - repeated completed `request_id` returns deterministic terminal `error` code `REQUEST_ALREADY_COMPLETED` and does not invoke the adapter.
-- [ ] Run: `python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
 - [ ] Expected: fail because FastAPI app modules do not exist.
 - [ ] Implement `create_app(settings=None, adapter=None, run_store=None)`.
 - [ ] Implement auth using `X-Internal-Key` and `LINGNENG_INTERNAL_API_KEY`.
@@ -407,7 +411,7 @@ implementing runtime code, running verification, committing, or pushing.
 - [ ] Use `FakeAgentRunAdapter` when `LINGNENG_AGENT_MODE=fake`.
 - [ ] Mark run status as `succeeded` after final and `failed` after streamed runtime errors.
 - [ ] Do not invoke the adapter for repeated running or completed request ids.
-- [ ] Run: `python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
+- [ ] Run: `uv run --extra dev python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能 Java 兼容 API`
 - [ ] Push the active branch after the commit succeeds.
@@ -957,7 +961,7 @@ implementing runtime code, running verification, committing, or pushing.
 | Phase | Required Verification |
 | --- | --- |
 | Phase 0 | Reference docs written; LingNengAI contract reference tests pass where runnable; GitHub workflow baseline recorded. |
-| Phase 1 | `python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api tests/lingneng/runtime -q`. |
+| Phase 1 | `uv run --extra dev python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api tests/lingneng/runtime -q`. |
 | Phase 2 | `python -m pytest tests/lingneng/runtime tests/lingneng/session tests/lingneng/contract/test_chat_stream_minimal.py -q`. |
 | Phase 3 | `python -m pytest tests/lingneng/tools/test_toolset_policy.py tests/lingneng/events/test_agent_step_bridge.py -q`. |
 | Phase 4 | `python -m pytest tests/lingneng/skills tests/lingneng/tools/test_retrieve_rag.py tests/lingneng/events/test_rag_events.py tests/lingneng/contract/test_rag_skill_chat_stream.py -q`. |
@@ -970,6 +974,7 @@ implementing runtime code, running verification, committing, or pushing.
 
 - Before starting any local service, identify intended ports and run `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
 - Do not kill unrelated processes to free a port.
+- Repository-local pytest commands in dedicated phase plans should use `uv run --extra dev python -m pytest` so declared runtime and dev dependencies are available even when `.venv` does not already exist.
 - Use `scripts/run_tests.sh` for broader regression checks before merging Phase branches.
 - Before executing any phase, write and review that phase's dedicated spec, then write and review that phase's dedicated plan; do not implement directly from this master roadmap.
 - Execute approved phase plans with `superpowers:subagent-driven-development`; do not use inline execution for phase implementation unless the user explicitly changes this rule.

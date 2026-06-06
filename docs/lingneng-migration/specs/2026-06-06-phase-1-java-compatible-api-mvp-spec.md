@@ -36,7 +36,9 @@ Phase 1 may create the following runtime modules and tests:
 - `lingneng/runtime/fake_agent.py`
 - `lingneng/events/__init__.py`
 - `lingneng/events/bridge.py`
+- `pyproject.toml` package discovery entries for `lingneng` and `lingneng.*`
 - `tests/lingneng/config/test_settings.py`
+- `tests/lingneng/config/test_packaging.py`
 - `tests/lingneng/schemas/test_chat_request_schema.py`
 - `tests/lingneng/schemas/test_chat_event_schema.py`
 - `tests/lingneng/api/test_sse_encoding.py`
@@ -462,13 +464,14 @@ confirm the test passes.
 Required focused test commands:
 
 ```bash
-python -m pytest tests/lingneng/config/test_settings.py -q
-python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q
-python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q
-python -m pytest tests/lingneng/session/test_session_key_resolver.py -q
-python -m pytest tests/lingneng/session/test_run_store.py -q
-python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q
-python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q
+uv run --extra dev python -m pytest tests/lingneng/config/test_settings.py -q
+uv run --extra dev python -m pytest tests/lingneng/config/test_packaging.py -q
+uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_request_schema.py -q
+uv run --extra dev python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q
+uv run --extra dev python -m pytest tests/lingneng/session/test_session_key_resolver.py -q
+uv run --extra dev python -m pytest tests/lingneng/session/test_run_store.py -q
+uv run --extra dev python -m pytest tests/lingneng/runtime/test_agent_adapter_contract.py -q
+uv run --extra dev python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q
 ```
 
 `tests/lingneng/api/test_chat_stream_contract.py` must include route-level
@@ -485,7 +488,7 @@ assertions for:
 Required phase-level verification:
 
 ```bash
-python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api tests/lingneng/runtime -q
+uv run --extra dev python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api tests/lingneng/runtime -q
 ```
 
 Reference contract command:
@@ -503,6 +506,8 @@ manually, port preflight must check `18083` before binding.
 Phase 1 is complete when:
 
 - `lingneng/` package modules listed in scope exist.
+- `pyproject.toml` package discovery includes `lingneng` and `lingneng.*` so
+  installed builds include the new runtime package.
 - Settings parse defaults and environment overrides without leaking secrets.
 - Java-compatible request schema parses the full current payload shape.
 - `conversationId` and `conversation_id` both populate `conversation_id`.

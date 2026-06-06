@@ -16,6 +16,11 @@ from typing import Any, Iterable
 
 
 DEFAULT_URL = "http://127.0.0.1:18083/internal/agent/chat/stream"
+DEFAULT_SYSTEM_PROMPT = "synthetic smoke system prompt"
+DEFAULT_SYSTEM_PROMPT_VERSION = "synthetic-system-prompt-v1"
+DEFAULT_SKILL_ID = "synthetic-smoke-skill-id"
+DEFAULT_SKILL_VERSION = "synthetic-smoke-skill-v1"
+DEFAULT_SKILL_HASH = "synthetic-smoke-skill-hash"
 ALLOWED_EVENTS = frozenset(
     {
         "run_started",
@@ -64,6 +69,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--employee-id", default="smoke-employee")
     parser.add_argument("--employee-type", default="boss_assistant")
     parser.add_argument("--query", default="ping")
+    parser.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT)
+    parser.add_argument(
+        "--system-prompt-version",
+        default=DEFAULT_SYSTEM_PROMPT_VERSION,
+    )
+    parser.add_argument("--skill-id", default=DEFAULT_SKILL_ID)
+    parser.add_argument("--skill-version", default=DEFAULT_SKILL_VERSION)
+    parser.add_argument("--skill-hash", default=DEFAULT_SKILL_HASH)
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
     return parser.parse_args(argv)
 
@@ -93,6 +106,15 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "employee": {
             "employee_id": args.employee_id,
             "employee_type": args.employee_type,
+        },
+        "system_prompt": {
+            "content": args.system_prompt,
+            "version": args.system_prompt_version,
+        },
+        "skill": {
+            "skill_id": args.skill_id,
+            "skill_version": args.skill_version,
+            "skill_hash": args.skill_hash,
         },
         "history": [],
         "attachments": [],

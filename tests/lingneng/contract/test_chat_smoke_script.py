@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from lingneng.schemas.chat_request import ChatStreamRequest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "lingneng-chat-smoke.py"
@@ -21,6 +23,16 @@ SENSITIVE_QUERY = (
     "https://storage.example.com/file?X-Amz-Signature=query-secret "
     "/Users/rotas/private/report.txt"
 )
+SYNTHETIC_SYSTEM_PROMPT = "synthetic smoke system prompt"
+SYNTHETIC_SYSTEM_PROMPT_VERSION = "synthetic-system-prompt-v1"
+SYNTHETIC_SKILL_ID = "synthetic-smoke-skill-id"
+SYNTHETIC_SKILL_VERSION = "synthetic-smoke-skill-v1"
+SYNTHETIC_SKILL_HASH = "synthetic-smoke-skill-hash"
+CLI_SYSTEM_PROMPT = "cli synthetic system prompt CLI_SYSTEM_PROMPT_SECRET"
+CLI_SYSTEM_PROMPT_VERSION = "cli-system-prompt-v1"
+CLI_SKILL_ID = "cli-synthetic-smoke-skill-id"
+CLI_SKILL_VERSION = "cli-synthetic-smoke-skill-v1"
+CLI_SKILL_HASH = "cli-synthetic-smoke-skill-hash"
 RAW_TOOL_OUTPUT = "RAW_TOOL_OUTPUT_SECRET_VALUE"
 
 
@@ -124,6 +136,7 @@ def run_smoke(
     internal_key: str | None = INTERNAL_KEY,
     env_internal_key: str | None = None,
     timeout_seconds: str = "5",
+    include_schema_cli_args: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     args = [
         sys.executable,
@@ -149,6 +162,21 @@ def run_smoke(
         "--timeout-seconds",
         timeout_seconds,
     ]
+    if include_schema_cli_args:
+        args.extend(
+            [
+                "--system-prompt",
+                CLI_SYSTEM_PROMPT,
+                "--system-prompt-version",
+                CLI_SYSTEM_PROMPT_VERSION,
+                "--skill-id",
+                CLI_SKILL_ID,
+                "--skill-version",
+                CLI_SKILL_VERSION,
+                "--skill-hash",
+                CLI_SKILL_HASH,
+            ]
+        )
     if internal_key is not None:
         args.extend(["--internal-key", internal_key])
     env = os.environ.copy()
@@ -167,8 +195,18 @@ def run_smoke(
     )
 
 
-def assert_java_payload(record: dict[str, Any], expected_key: str | None) -> None:
+def assert_java_payload(
+    record: dict[str, Any],
+    expected_key: str | None,
+    *,
+    system_prompt: str = SYNTHETIC_SYSTEM_PROMPT,
+    system_prompt_version: str = SYNTHETIC_SYSTEM_PROMPT_VERSION,
+    skill_id: str = SYNTHETIC_SKILL_ID,
+    skill_version: str = SYNTHETIC_SKILL_VERSION,
+    skill_hash: str = SYNTHETIC_SKILL_HASH,
+) -> None:
     payload = record["payload"]
+    validated = ChatStreamRequest.model_validate(payload)
 
     assert record["method"] == "POST"
     assert record["path"] == "/internal/agent/chat/stream"
@@ -182,10 +220,20 @@ def assert_java_payload(record: dict[str, Any], expected_key: str | None) -> Non
     assert payload["query"]["content"] == SENSITIVE_QUERY
     assert payload["employee"]["employee_id"] == "employee-smoke"
     assert payload["employee"]["employee_type"] == "boss_assistant"
+    assert payload["system_prompt"]["content"] == system_prompt
+    assert payload["system_prompt"]["version"] == system_prompt_version
+    assert payload["skill"]["skill_id"] == skill_id
+    assert payload["skill"]["skill_version"] == skill_version
+    assert payload["skill"]["skill_hash"] == skill_hash
     assert payload["history"] == []
     assert payload["attachments"] == []
     assert payload["stream_options"]["include_citations"] is True
     assert payload["stream_options"]["include_rag_context"] is True
+    assert validated.system_prompt.content == system_prompt
+    assert validated.system_prompt.version == system_prompt_version
+    assert validated.skill.skill_id == skill_id
+    assert validated.skill.skill_version == skill_version
+    assert validated.skill.skill_hash == skill_hash
 
 
 def assert_safe_output(result: subprocess.CompletedProcess[str]) -> None:
@@ -194,6 +242,16 @@ def assert_safe_output(result: subprocess.CompletedProcess[str]) -> None:
     assert INTERNAL_KEY not in combined
     assert ENV_INTERNAL_KEY not in combined
     assert SENSITIVE_QUERY not in combined
+    assert SYNTHETIC_SYSTEM_PROMPT not in combined
+    assert SYNTHETIC_SYSTEM_PROMPT_VERSION not in combined
+    assert SYNTHETIC_SKILL_ID not in combined
+    assert SYNTHETIC_SKILL_VERSION not in combined
+    assert SYNTHETIC_SKILL_HASH not in combined
+    assert CLI_SYSTEM_PROMPT not in combined
+    assert CLI_SYSTEM_PROMPT_VERSION not in combined
+    assert CLI_SKILL_ID not in combined
+    assert CLI_SKILL_VERSION not in combined
+    assert CLI_SKILL_HASH not in combined
     assert "SENSITIVE_ORDER_42" not in combined
     assert "api_key" not in combined
     assert "X-Amz-Signature" not in combined
@@ -201,6 +259,8 @@ def assert_safe_output(result: subprocess.CompletedProcess[str]) -> None:
     assert RAW_TOOL_OUTPUT not in combined
     assert '"query"' not in combined
     assert '"request_id"' not in combined
+    assert '"system_prompt"' not in combined
+    assert '"skill"' not in combined
 
 
 def test_smoke_script_posts_java_payload_and_succeeds_after_final() -> None:
@@ -243,6 +303,28 @@ def test_smoke_script_uses_internal_key_from_environment() -> None:
 
     assert result.returncode == 0, result.stderr
     assert_java_payload(server.requests[0], ENV_INTERNAL_KEY)
+    assert_safe_output(result)
+
+
+def test_smoke_script_accepts_system_prompt_and_skill_cli_args() -> None:
+    frames = [
+        sse_frame("run_started", {"run_id": "run-1"}),
+        final_frame(),
+    ]
+
+    with SmokeServer(frames=frames) as server:
+        result = run_smoke(server.url, include_schema_cli_args=True)
+
+    assert result.returncode == 0, result.stderr
+    assert_java_payload(
+        server.requests[0],
+        INTERNAL_KEY,
+        system_prompt=CLI_SYSTEM_PROMPT,
+        system_prompt_version=CLI_SYSTEM_PROMPT_VERSION,
+        skill_id=CLI_SKILL_ID,
+        skill_version=CLI_SKILL_VERSION,
+        skill_hash=CLI_SKILL_HASH,
+    )
     assert_safe_output(result)
 
 

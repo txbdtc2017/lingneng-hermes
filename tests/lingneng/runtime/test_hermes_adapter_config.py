@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import pytest
 
 from lingneng.api.app import create_app
@@ -34,6 +37,43 @@ def test_create_app_uses_hermes_adapter_for_hermes_mode(tmp_path):
     app = create_app(settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"))
 
     assert app.state.lingneng_adapter.__class__.__name__ == "HermesAgentRunAdapter"
+
+
+def test_runtime_package_import_does_not_load_run_agent():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import lingneng.runtime; "
+                "print('run_agent' in sys.modules)"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "False"
+
+
+def test_runtime_package_lazy_hermes_export_still_works():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from lingneng.runtime import HermesAgentRunAdapter; "
+                "print(HermesAgentRunAdapter.__name__)"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "HermesAgentRunAdapter"
 
 
 class CapturingAgent:

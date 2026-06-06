@@ -49,6 +49,15 @@ _SECRET_QUERY_PARTS = (
     "x-amz",
 )
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_LOCAL_PATH_FRAGMENT_RE = re.compile(
+    r"(?:^|[\s=:\"'(\[{,])(?:~[\\/]|/[^\s\"'<>|]+|[a-zA-Z]:[\\/])"
+)
+_SECRET_MARKER_RE = re.compile(
+    r"(?:^|[^a-z0-9])("
+    + "|".join(re.escape(marker) for marker in _SECRET_QUERY_PARTS)
+    + r")(?:$|[^a-z0-9])",
+    re.IGNORECASE,
+)
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[a-zA-Z]:[\\/]")
 
 
@@ -138,7 +147,12 @@ def _sanitize_object_key(value: Any) -> str | None:
     stripped = value.strip()
     if not stripped:
         return None
-    if _CONTROL_CHAR_RE.search(stripped) or _looks_like_local_path(stripped):
+    if (
+        _CONTROL_CHAR_RE.search(stripped)
+        or _looks_like_local_path(stripped)
+        or _contains_embedded_local_path(stripped)
+        or _contains_secret_marker(stripped)
+    ):
         return None
     if _has_path_traversal(stripped):
         return None
@@ -151,7 +165,11 @@ def _strip_control_chars(value: str) -> str:
 
 def _sanitize_public_string(value: str) -> str | None:
     clean_text = _strip_control_chars(value).strip()
-    if _looks_like_local_path(clean_text):
+    if (
+        _looks_like_local_path(clean_text)
+        or _contains_embedded_local_path(clean_text)
+        or _contains_secret_marker(clean_text)
+    ):
         return None
     return clean_text
 
@@ -166,6 +184,15 @@ def _looks_like_local_path(value: str) -> bool:
         lowered.startswith(("file://", "local://"))
         or value.startswith(("/", "\\", "~"))
         or _WINDOWS_ABSOLUTE_PATH_RE.match(value) is not None
+    )
+
+
+def _contains_embedded_local_path(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        "file://" in lowered
+        or "local://" in lowered
+        or _LOCAL_PATH_FRAGMENT_RE.search(value) is not None
     )
 
 
@@ -186,5 +213,4 @@ def _query_looks_secret(query: str) -> bool:
 
 
 def _contains_secret_marker(value: str) -> bool:
-    lowered = value.lower()
-    return any(part in lowered for part in _SECRET_QUERY_PARTS)
+    return _SECRET_MARKER_RE.search(value) is not None

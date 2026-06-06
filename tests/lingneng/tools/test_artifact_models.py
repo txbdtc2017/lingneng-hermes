@@ -76,6 +76,28 @@ def test_artifact_sanitizer_strips_unsafe_object_keys(object_key):
         artifact_from_public_dict(sanitized)
 
 
+@pytest.mark.parametrize(
+    "object_key",
+    [
+        "external/java-agent-file/token=abc123/report.pdf",
+        "external/java-agent-file/api_key/report.pdf",
+        "external/java-agent-file/bearer abc123/report.pdf",
+        "external/java-agent-file/x-amz-signature/report.pdf",
+    ],
+)
+def test_artifact_sanitizer_strips_secret_shaped_object_keys(object_key):
+    sanitized = sanitize_artifact_public_dict({**ARTIFACT, "object_key": object_key})
+
+    dumped = json.dumps(sanitized, ensure_ascii=False).lower()
+    assert object_key.lower() not in dumped
+    assert "token" not in dumped
+    assert "api_key" not in dumped
+    assert "bearer" not in dumped
+    assert "x-amz" not in dumped
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized)
+
+
 def test_artifact_sanitizer_strips_secret_shaped_url_queries():
     unsafe = {
         **ARTIFACT,
@@ -110,6 +132,27 @@ def test_artifact_sanitizer_strips_local_paths_from_public_strings():
 
     dumped = json.dumps(sanitized, ensure_ascii=False)
     assert "/Users/rotas" not in dumped
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "forbidden"),
+    [
+        ("file_name", "report /Users/rotas/secret.pdf", "/Users/rotas"),
+        ("file_name", "report C:\\Users\\rotas\\secret.pdf", "C:\\Users"),
+        ("source", "bearer abc123", "bearer"),
+        ("source", "document_generation token=abc123", "token"),
+    ],
+)
+def test_artifact_sanitizer_strips_embedded_local_paths_and_secrets_from_strings(
+    field, value, forbidden
+):
+    sanitized = sanitize_artifact_public_dict({**ARTIFACT, field: value})
+
+    dumped = json.dumps(sanitized, ensure_ascii=False).lower()
+    assert value.lower() not in dumped
+    assert forbidden.lower() not in dumped
     with pytest.raises(ValidationError):
         artifact_from_public_dict(sanitized)
 

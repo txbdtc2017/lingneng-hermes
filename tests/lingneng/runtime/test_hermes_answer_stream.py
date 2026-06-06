@@ -127,6 +127,30 @@ class RagHitToolProgressAgent:
         return {"final_response": "完成", "messages": []}
 
 
+class RagNotConfiguredToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.tool_progress_callback(
+            "tool.completed",
+            "retrieve_rag",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": False,
+                    "tool_name": "retrieve_rag",
+                    "code": "NOT_CONFIGURED",
+                    "message": "LingNeng RAG provider is not configured.",
+                }
+            ),
+        )
+        return {"final_response": "完成", "messages": []}
+
+
 class ConcurrentToolProgressAgent:
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -277,6 +301,24 @@ async def test_retrieve_rag_completion_emits_rag_events_and_final_citations(tmp_
     assert events[3].status == "hit"
     assert isinstance(events[-1], FinalEvent)
     assert events[-1].model_dump()["citations"][0]["chunk_id"] == "chunk-1"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_rag_failure_without_status_emits_failed_context(tmp_path):
+    request, resolved = request_and_session_with_rag_context()
+    adapter = HermesAgentRunAdapter(
+        settings(tmp_path),
+        agent_cls=RagNotConfiguredToolProgressAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    rag_contexts = [event for event in events if isinstance(event, RagContextEvent)]
+
+    assert len(rag_contexts) == 1
+    assert rag_contexts[0].status == "failed"
+    assert rag_contexts[0].context == "LingNeng RAG provider is not configured."
+    assert isinstance(events[-1], FinalEvent)
+    assert events[-1].citations == []
 
 
 @pytest.mark.asyncio

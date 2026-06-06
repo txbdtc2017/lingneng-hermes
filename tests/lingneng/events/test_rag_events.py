@@ -143,6 +143,55 @@ def test_failed_rag_context_uses_public_message_and_sanitizes_metadata():
     assert citations == []
 
 
+def test_rag_context_metadata_strips_request_and_authorization_details():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            metadata={
+                "selected_count": 1,
+                "citation_count": 1,
+                "duration_ms": 42,
+                "request_payload": {"query": "USER PRIVATE INPUT"},
+                "authorization": "Bearer abc123",
+                "notes": ["Bearer abc123"],
+            }
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert events[1].metadata == {
+        "selected_count": 1,
+        "citation_count": 1,
+        "duration_ms": 42,
+        "notes": [""],
+    }
+    assert citations == [CITATION]
+
+
+def test_failure_shaped_result_without_status_emits_failed_context():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=json.dumps(
+            {
+                "success": False,
+                "tool_name": "retrieve_rag",
+                "code": "NOT_CONFIGURED",
+                "message": "LingNeng RAG provider is not configured.",
+            }
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [RagContextEvent]
+    assert events[0].status == "failed"
+    assert events[0].context == "LingNeng RAG provider is not configured."
+    assert events[0].metadata == {}
+    assert citations == []
+
+
 def test_missing_status_defaults_from_valid_citations():
     events, citations = rag_events_from_tool_result(
         tool_name="retrieve_rag",

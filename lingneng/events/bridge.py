@@ -22,6 +22,14 @@ _PUBLIC_TEXT_BLOCKLIST = (
     "api_key",
     "secret",
     "token",
+    "request",
+    "payload",
+    "query",
+    "args",
+    "history",
+    "input",
+    "authorization",
+    "bearer",
     "traceback",
     "exception",
 )
@@ -144,7 +152,7 @@ def rag_events_from_tool_result(
             RagContextEvent(
                 context=_rag_context_text(payload),
                 citations=valid_citations,
-                status=_rag_status(payload.get("status"), valid_citations),
+                status=_rag_status(payload, valid_citations),
                 metadata=_rag_metadata(payload.get("metadata")),
             )
         )
@@ -223,7 +231,10 @@ def _valid_citations(value: Any) -> list[Citation]:
     return citations
 
 
-def _rag_status(value: Any, citations: list[Citation]) -> str:
+def _rag_status(payload: dict[str, Any], citations: list[Citation]) -> str:
+    if _is_failure_result(payload):
+        return "failed"
+    value = payload.get("status")
     if value in {"hit", "empty", "failed"}:
         return value
     return "hit" if citations else "empty"
@@ -234,7 +245,7 @@ def _rag_context_text(payload: dict[str, Any]) -> str:
     if isinstance(context, str) and _is_public_text(context):
         return context
     message = payload.get("message")
-    if payload.get("status") == "failed" and isinstance(message, str):
+    if _is_failure_result(payload) and isinstance(message, str):
         return message if _is_public_text(message) else ""
     return ""
 
@@ -247,6 +258,14 @@ def _rag_metadata(value: Any) -> dict[str, Any]:
 def _is_public_text(value: str) -> bool:
     lowered = value.lower()
     return not any(part in lowered for part in _PUBLIC_TEXT_BLOCKLIST)
+
+
+def _is_failure_result(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("status") == "failed"
+        or payload.get("success") is False
+        or bool(payload.get("code"))
+    )
 
 
 def _sanitize_public_value(value: Any) -> Any:

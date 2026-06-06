@@ -241,6 +241,7 @@ TOOLSETS = {
             "write_workspace",
         ],
         "includes": [],
+        "merge_registry_tools": False,
     },
     
     "session_search": {
@@ -592,6 +593,8 @@ def get_toolset(name: str) -> Optional[Dict[str, Any]]:
         return toolset if toolset else None
 
     if toolset:
+        if toolset.get("merge_registry_tools") is False:
+            return {**toolset, "tools": list(toolset.get("tools", []))}
         merged_tools = sorted(
             set(toolset.get("tools", []))
             | set(registry.get_tool_names_for_toolset(name))

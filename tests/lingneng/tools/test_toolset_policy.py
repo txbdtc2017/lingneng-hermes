@@ -6,10 +6,11 @@ import sys
 from pathlib import Path
 
 import lingneng.tools.toolset  # noqa: F401
+import model_tools
 from lingneng.tools.stubs import LINGNENG_TOOL_NAMES, handler_for
 from model_tools import get_tool_definitions
 from toolsets import resolve_toolset, validate_toolset
-from tools.registry import registry
+from tools.registry import ToolRegistry, registry
 
 
 APPROVED_LINGNENG_TOOLS = {
@@ -74,6 +75,7 @@ def test_lingneng_tools_package_import_is_lightweight():
         capture_output=True,
         text=True,
         check=False,
+        timeout=5,
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -111,6 +113,48 @@ def test_lingneng_tool_definitions_expose_only_lingneng_schemas():
         assert schema["parameters"]["additionalProperties"] is False
 
 
+def test_lingneng_toolset_ignores_registry_extra_tools(monkeypatch):
+    probe_registry = ToolRegistry()
+    for tool_name in APPROVED_LINGNENG_TOOLS:
+        entry = registry.get_entry(tool_name)
+        assert entry is not None
+        probe_registry.register(
+            name=tool_name,
+            toolset=entry.toolset,
+            schema=entry.schema,
+            handler=entry.handler,
+        )
+    probe_registry.register(
+        name="lingneng_extra_probe",
+        toolset="lingneng",
+        schema={
+            "name": "lingneng_extra_probe",
+            "description": "Probe for LingNeng toolset boundary regression.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        handler=lambda args, **kwargs: "{}",
+    )
+
+    monkeypatch.setattr("tools.registry.registry", probe_registry)
+    monkeypatch.setattr(model_tools, "registry", probe_registry)
+
+    assert set(resolve_toolset("lingneng")) == APPROVED_LINGNENG_TOOLS
+
+    definitions = get_tool_definitions(
+        enabled_toolsets=["lingneng"],
+        disabled_toolsets=["kanban"],
+        quiet_mode=True,
+    )
+    names = {tool["function"]["name"] for tool in definitions}
+
+    assert "lingneng_extra_probe" not in names
+    assert names == APPROVED_LINGNENG_TOOLS
+
+
 def test_lingneng_stub_handlers_return_not_configured_shape():
     forbidden_keys = {
         "args",
@@ -125,9 +169,11 @@ def test_lingneng_stub_handlers_return_not_configured_shape():
     }
     for tool_name in APPROVED_LINGNENG_TOOLS:
         result = json.loads(handler_for(tool_name)({"query": "hello"}))
+        dispatched = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
         assert result["success"] is False
         assert result["code"] == "NOT_CONFIGURED"
         assert result["tool_name"] == tool_name
         assert result["phase"] == "phase_3_stub"
         assert "not configured" in result["message"].lower()
         assert forbidden_keys.isdisjoint(result)
+        assert dispatched == result

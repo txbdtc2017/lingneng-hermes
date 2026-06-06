@@ -291,7 +291,7 @@ implementing runtime code, running verification, committing, or pushing.
   - `FinalEvent(run_id, status, answer, citations=[], artifacts=[])`
   - `ErrorEvent(run_id, request_id, code, message, trace_id, recoverable)`
 - [ ] Write failing encoder tests:
-  - `encode_sse("answer_delta", {"text": "你好"})` returns `event: answer_delta\ndata: {"text":"你好"}\n\n` with UTF-8-safe JSON.
+  - `encode_sse("answer_delta", {"text": "你好"})` returns `event: answer_delta\ndata: {"text": "你好"}\n\n` with UTF-8-safe JSON.
   - `heartbeat_frame()` returns `: ping\n\n`.
 - [ ] Run: `python -m pytest tests/lingneng/schemas/test_chat_event_schema.py tests/lingneng/api/test_sse_encoding.py -q`
 - [ ] Expected: fail because event schema and SSE encoder do not exist.
@@ -334,7 +334,7 @@ implementing runtime code, running verification, committing, or pushing.
   - first `request_id` in a session creates status `running`.
   - same `request_id` while running returns the existing run without creating another row.
   - completed run stores final answer and terminal status.
-  - repeated completed request returns stored final result.
+  - repeated completed request returns the existing run state without creating another row.
   - same `request_id` in a different session creates a separate run.
   - retention cleanup deletes rows older than configured days.
 - [ ] Run: `python -m pytest tests/lingneng/session/test_run_store.py -q`
@@ -342,6 +342,7 @@ implementing runtime code, running verification, committing, or pushing.
 - [ ] Implement SQLite table `lingneng_runs` in a dedicated DB file under `LINGNENG_RUNTIME_DIR`.
 - [ ] Use `(session_key, request_id)` as the unique idempotency boundary.
 - [ ] Store `run_id`, `status`, `answer`, `error_code`, `error_message`, `artifacts_json`, `created_at`, `updated_at`, and `completed_at`.
+- [ ] Leave completed-run SSE replay to Phase 2; Phase 1 route handling may return `REQUEST_ALREADY_COMPLETED` for repeated completed requests and must not invoke the adapter again.
 - [ ] Run: `python -m pytest tests/lingneng/session/test_run_store.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能请求幂等存储`
@@ -384,16 +385,28 @@ implementing runtime code, running verification, committing, or pushing.
 - [ ] Write failing tests with `fastapi.testclient.TestClient`:
   - `GET /internal/agent/health` returns `{"status":"ok"}`.
   - `GET /internal/agent/ready` returns status and configuration summary without secrets.
-  - `POST /internal/agent/chat/stream` returns `text/event-stream`.
+  - `GET /internal/agent/ready` under production-like empty-key settings reports not-ready without secrets.
+  - successful `POST /internal/agent/chat/stream` uses either a configured internal key or `allow_insecure_local=true`, then returns `text/event-stream`.
   - stream contains `event: run_started`, `event: answer_delta`, and `event: final`.
   - missing/invalid internal key returns non-SSE HTTP error when auth is enabled.
+  - local/dev/test environment with no internal key and `allow_insecure_local=false` returns non-SSE HTTP 503 before stream start.
+  - production-like environment with no internal key configured returns non-SSE HTTP 503 before stream start.
+  - adapter/runtime failure after stream start emits one terminal `error` event with `run_id`, `request_id`, `code`, `message`, `trace_id`, and `recoverable`, and emits no `final`.
+  - repeated running `request_id` returns deterministic terminal `error` code `REQUEST_ALREADY_RUNNING` and does not invoke the adapter.
+  - repeated completed `request_id` returns deterministic terminal `error` code `REQUEST_ALREADY_COMPLETED` and does not invoke the adapter.
 - [ ] Run: `python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
 - [ ] Expected: fail because FastAPI app modules do not exist.
 - [ ] Implement `create_app(settings=None, adapter=None, run_store=None)`.
 - [ ] Implement auth using `X-Internal-Key` and `LINGNENG_INTERNAL_API_KEY`.
+- [ ] Make the ready endpoint return a not-ready status without secrets when production-like settings have no internal key.
+- [ ] Reject unsafe missing-key configuration before stream start with HTTP 503 when `app_env` is `local`, `dev`, or `test` and `allow_insecure_local=false`.
+- [ ] Reject unsafe missing-key configuration before stream start with HTTP 503 when `app_env` is not `local`, `dev`, or `test`.
+- [ ] Reserve/check the run store before invoking the adapter.
 - [ ] Implement `/internal/agent/chat/stream` using `StreamingResponse`.
 - [ ] Wrap stream with heartbeat every 15 seconds.
 - [ ] Use `FakeAgentRunAdapter` when `LINGNENG_AGENT_MODE=fake`.
+- [ ] Mark run status as `succeeded` after final and `failed` after streamed runtime errors.
+- [ ] Do not invoke the adapter for repeated running or completed request ids.
 - [ ] Run: `python -m pytest tests/lingneng/api/test_chat_stream_contract.py -q`
 - [ ] Expected: pass.
 - [ ] Commit: `feat: 增加灵能 Java 兼容 API`
@@ -944,7 +957,7 @@ implementing runtime code, running verification, committing, or pushing.
 | Phase | Required Verification |
 | --- | --- |
 | Phase 0 | Reference docs written; LingNengAI contract reference tests pass where runnable; GitHub workflow baseline recorded. |
-| Phase 1 | `python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api -q`. |
+| Phase 1 | `python -m pytest tests/lingneng/config tests/lingneng/schemas tests/lingneng/session tests/lingneng/api tests/lingneng/runtime -q`. |
 | Phase 2 | `python -m pytest tests/lingneng/runtime tests/lingneng/session tests/lingneng/contract/test_chat_stream_minimal.py -q`. |
 | Phase 3 | `python -m pytest tests/lingneng/tools/test_toolset_policy.py tests/lingneng/events/test_agent_step_bridge.py -q`. |
 | Phase 4 | `python -m pytest tests/lingneng/skills tests/lingneng/tools/test_retrieve_rag.py tests/lingneng/events/test_rag_events.py tests/lingneng/contract/test_rag_skill_chat_stream.py -q`. |

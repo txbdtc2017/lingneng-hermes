@@ -1,3 +1,10 @@
+# LingNeng Fork Overlay
+
+This checkout is the LingNeng Hermes runtime fork. Before doing
+LingNeng-related work, read `LINGNENG_MIGRATION_CONTEXT.md` after this file.
+That file records the migration direction, Java compatibility constraints,
+session policy, SSE contract, and first implementation priorities.
+
 # Hermes Agent - Development Guide
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.

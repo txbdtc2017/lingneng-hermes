@@ -153,7 +153,7 @@ def test_lingneng_web_search_definition_fails_closed_without_context(tmp_path):
     assert names == APPROVED_LINGNENG_TOOLS - {"web_search"}
 
 
-def test_inactive_lingneng_web_search_dispatch_does_not_hit_hermes_handler(
+def test_inactive_lingneng_web_search_dispatch_uses_hermes_handler(
     monkeypatch,
 ):
     entry = registry.get_entry("web_search")
@@ -170,8 +170,8 @@ def test_inactive_lingneng_web_search_dispatch_does_not_hit_hermes_handler(
 
     result = json.loads(registry.dispatch("web_search", {"query": "hello"}))
 
-    assert called is False
-    assert "error" in result
+    assert called is True
+    assert result == {"hermes_handler_called": True}
 
 
 def test_lingneng_toolset_ignores_registry_extra_tools(monkeypatch):

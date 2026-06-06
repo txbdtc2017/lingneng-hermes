@@ -540,8 +540,6 @@ class ToolRegistry:
         """
         entry = self.get_entry(name)
         override = self._active_context_override(name)
-        if override is None and self._inactive_fail_closed_context_override(name):
-            return json.dumps({"error": f"Tool unavailable outside active context: {name}"})
         if not entry and not override:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:

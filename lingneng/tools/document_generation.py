@@ -10,7 +10,11 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lingneng.config.settings import LingNengSettings
-from lingneng.tools.artifacts import artifact_from_public_dict, dedupe_artifacts
+from lingneng.tools.artifacts import (
+    artifact_from_public_dict,
+    dedupe_artifacts,
+    stable_percent_decode,
+)
 
 
 ToolStatus = Literal["succeeded", "failed", "skipped"]
@@ -168,7 +172,7 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
             settings=settings,
         )
 
-    artifacts = _valid_artifact_dicts(result.artifacts)
+    artifacts = _valid_artifact_dicts(result.artifacts, settings=settings)
     if not artifacts:
         return _json_result(
             _public_result(
@@ -266,6 +270,7 @@ def _valid_artifact_dicts(
     value: list[Any],
     *,
     overrides: dict[str, Any] | None = None,
+    settings: LingNengSettings | None = None,
 ) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
     for item in value:
@@ -275,7 +280,7 @@ def _valid_artifact_dicts(
         if overrides:
             candidate.update(overrides)
         try:
-            artifact = artifact_from_public_dict(candidate)
+            artifact = artifact_from_public_dict(candidate, settings=settings)
         except ValidationError:
             continue
         artifacts.append(artifact.model_dump(mode="json"))
@@ -381,11 +386,15 @@ def _sanitize_public_value_at_depth(value: Any, *, depth: int) -> Any:
 
 def _sanitize_public_text(value: str, *, max_chars: int) -> str:
     clean_text = _strip_control_chars(value).strip()
-    lowered = clean_text.lower()
+    decoded, decode_stable = stable_percent_decode(clean_text)
+    lowered = decoded.lower()
     if (
-        any(part in lowered for part in _FORBIDDEN_TEXT_PARTS)
+        not decode_stable
+        or any(part in lowered for part in _FORBIDDEN_TEXT_PARTS)
         or _looks_like_local_path(clean_text)
+        or _looks_like_local_path(decoded)
         or _contains_embedded_local_path(clean_text)
+        or _contains_embedded_local_path(decoded)
     ):
         return ""
     return clean_text[:max_chars]
@@ -396,7 +405,10 @@ def _strip_control_chars(value: str) -> str:
 
 
 def _is_forbidden_key(value: object) -> bool:
-    lowered = str(value).lower()
+    decoded, decode_stable = stable_percent_decode(str(value))
+    if not decode_stable:
+        return True
+    lowered = decoded.lower()
     return lowered in _FORBIDDEN_KEY_EXACT or any(
         part in lowered for part in _FORBIDDEN_KEY_PARTS
     )

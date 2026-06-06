@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
@@ -202,6 +203,7 @@ def artifact_events_from_tool_result(
     *,
     tool_name: str,
     result: Any,
+    settings: LingNengSettings | None = None,
 ) -> tuple[list[ArtifactCreatedEvent], list[dict[str, Any]]]:
     if not is_artifact_producing_tool(tool_name):
         return [], []
@@ -214,7 +216,7 @@ def artifact_events_from_tool_result(
     if payload_tool_name is not None and payload_tool_name != tool_name:
         return [], []
 
-    artifacts = _valid_artifact_dicts(payload.get("artifacts"))
+    artifacts = _valid_artifact_dicts(payload.get("artifacts"), settings=settings)
     events = [
         ArtifactCreatedEvent.model_validate(artifact)
         for artifact in artifacts
@@ -235,13 +237,14 @@ def final_answer(
     answer: str,
     citations: list[dict[str, Any]] | None = None,
     artifacts: list[dict[str, Any]] | None = None,
+    settings: LingNengSettings | None = None,
 ) -> FinalEvent:
     return FinalEvent(
         run_id=run_id,
         status="succeeded",
         answer=answer,
         citations=citations or [],
-        artifacts=_valid_artifact_dicts(artifacts or []),
+        artifacts=_valid_artifact_dicts(artifacts or [], settings=settings),
     )
 
 
@@ -288,7 +291,11 @@ def _valid_citations(value: Any) -> list[Citation]:
     return citations
 
 
-def _valid_artifact_dicts(value: Any) -> list[dict[str, Any]]:
+def _valid_artifact_dicts(
+    value: Any,
+    *,
+    settings: LingNengSettings | None = None,
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
 
@@ -300,7 +307,7 @@ def _valid_artifact_dicts(value: Any) -> list[dict[str, Any]]:
             else:
                 continue
         try:
-            artifact = artifact_from_public_dict(item)
+            artifact = artifact_from_public_dict(item, settings=settings)
         except (TypeError, ValueError, ValidationError):
             continue
         artifacts.append(artifact.model_dump(mode="json"))

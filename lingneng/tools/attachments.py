@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_request import AttachmentPayload, ChatStreamRequest
-from lingneng.tools.artifacts import sanitize_strict_public_url
+from lingneng.tools.artifacts import sanitize_strict_public_url, stable_percent_decode
 
 
 AttachmentProviderStatus = Literal["succeeded", "failed", "skipped", "timeout"]
@@ -340,6 +340,12 @@ def _select_attachments(
         ]
 
     for attachment in attachments:
+        raw_host = _url_host(attachment.download_url)
+        if raw_host and _is_disallowed_download_host(raw_host):
+            warnings.append(
+                _warning("ATTACHMENT_HOST_NOT_ALLOWED", attachment=attachment)
+            )
+            continue
         clean_url = sanitize_strict_public_url(attachment.download_url)
         if not clean_url:
             warnings.append(_warning("ATTACHMENT_URL_INVALID", attachment=attachment))
@@ -417,11 +423,15 @@ def _sanitize_prompt_text(value: str) -> str:
     if not isinstance(value, str):
         return ""
     clean_text = _CONTROL_CHAR_RE.sub("", value).strip()
-    lowered = clean_text.lower()
+    decoded, decode_stable = stable_percent_decode(clean_text)
+    lowered = decoded.lower()
     if (
-        any(part in lowered for part in _FORBIDDEN_TEXT_PARTS)
+        not decode_stable
+        or any(part in lowered for part in _FORBIDDEN_TEXT_PARTS)
         or _looks_like_local_path(clean_text)
+        or _looks_like_local_path(decoded)
         or _contains_embedded_local_path(clean_text)
+        or _contains_embedded_local_path(decoded)
     ):
         return ""
     return clean_text

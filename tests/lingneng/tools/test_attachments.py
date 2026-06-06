@@ -138,6 +138,42 @@ def test_attachment_context_uses_current_request_only(tmp_path):
     assert second.selected_count == 1
 
 
+@pytest.mark.parametrize(
+    "context_text",
+    [
+        "api%5Fkey%3Dabc123",
+        "Bearer%20abc123",
+        "%2FUsers%2Frotas%2Fsecret.pdf",
+    ],
+)
+def test_attachment_prompt_text_percent_decodes_before_secret_checks(
+    tmp_path,
+    context_text,
+):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text=context_text,
+            processed_count=1,
+            failed_count=0,
+            selected_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        result = build_attachment_prompt_context(
+            settings(tmp_path),
+            request_with_attachments(attachment()),
+        )
+
+    assert result.prompt_text == ""
+    dumped = json.dumps(result.model_dump(), ensure_ascii=False).lower()
+    assert "api%5fkey" not in dumped
+    assert "bearer%20" not in dumped
+    assert "%2fusers%2frotas" not in dumped
+    assert "abc123" not in dumped
+    assert "/users/rotas" not in dumped
+
+
 def test_attachment_rejects_unallowed_host(tmp_path):
     provider = FakeAttachmentProvider(
         AttachmentProcessingResult(context_text="must not run", processed_count=1)

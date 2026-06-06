@@ -344,6 +344,23 @@ def _compute_tool_definitions(
     """Uncached implementation of :func:`get_tool_definitions`."""
     # Determine which tool names the caller wants
     tools_to_include: set = set()
+    requested_toolsets: set[str] = set()
+    requested_toolsets_by_tool: dict[str, set[str]] = {}
+
+    def add_toolset_tools(toolset_name: str, tools: list[str]) -> None:
+        requested_toolsets.add(toolset_name)
+        for tool_name in tools:
+            requested_toolsets_by_tool.setdefault(tool_name, set()).add(toolset_name)
+
+    def remove_toolset_tools(toolset_name: str, tools: list[str]) -> None:
+        requested_toolsets.discard(toolset_name)
+        for tool_name in tools:
+            source_toolsets = requested_toolsets_by_tool.get(tool_name)
+            if not source_toolsets:
+                continue
+            source_toolsets.discard(toolset_name)
+            if not source_toolsets:
+                requested_toolsets_by_tool.pop(tool_name, None)
 
     if enabled_toolsets is not None:
         effective_enabled_toolsets = list(enabled_toolsets)
@@ -357,6 +374,7 @@ def _compute_tool_definitions(
         for toolset_name in effective_enabled_toolsets:
             if validate_toolset(toolset_name):
                 resolved = resolve_toolset(toolset_name)
+                add_toolset_tools(toolset_name, resolved)
                 tools_to_include.update(resolved)
                 if not quiet_mode:
                     print(f"✅ Enabled toolset '{toolset_name}': {', '.join(resolved) if resolved else 'no tools'}")
@@ -371,7 +389,9 @@ def _compute_tool_definitions(
         # Default: start with everything
         from toolsets import get_all_toolsets
         for ts_name in get_all_toolsets():
-            tools_to_include.update(resolve_toolset(ts_name))
+            resolved = resolve_toolset(ts_name)
+            add_toolset_tools(ts_name, resolved)
+            tools_to_include.update(resolved)
 
     # Always apply disabled toolsets as a subtraction step at the end.
     # This ensures that even if a composite toolset (like hermes-cli)
@@ -381,6 +401,7 @@ def _compute_tool_definitions(
         for toolset_name in disabled_toolsets:
             if validate_toolset(toolset_name):
                 resolved = resolve_toolset(toolset_name)
+                remove_toolset_tools(toolset_name, resolved)
                 tools_to_include.difference_update(resolved)
                 if not quiet_mode:
                     print(f"🚫 Disabled toolset '{toolset_name}': {', '.join(resolved) if resolved else 'no tools'}")
@@ -399,7 +420,12 @@ def _compute_tool_definitions(
     # other toolset.
 
     # Ask the registry for schemas (only returns tools whose check_fn passes)
-    filtered_tools = registry.get_definitions(tools_to_include, quiet=quiet_mode)
+    filtered_tools = registry.get_definitions(
+        tools_to_include,
+        quiet=quiet_mode,
+        requested_toolsets=requested_toolsets,
+        requested_toolsets_by_tool=requested_toolsets_by_tool,
+    )
 
     # The set of tool names that actually passed check_fn filtering.
     # Use this (not tools_to_include) for any downstream schema that references

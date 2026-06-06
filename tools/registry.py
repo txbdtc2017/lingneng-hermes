@@ -114,7 +114,15 @@ class ToolContextOverride:
     dispatch while their ``is_active`` predicate is true.
     """
 
-    __slots__ = ("name", "schema", "handler", "is_active", "is_async")
+    __slots__ = (
+        "name",
+        "schema",
+        "handler",
+        "is_active",
+        "is_async",
+        "fail_closed",
+        "fail_closed_toolsets",
+    )
 
     def __init__(
         self,
@@ -123,12 +131,16 @@ class ToolContextOverride:
         handler: Callable,
         is_active: Callable[[], bool],
         is_async: bool,
+        fail_closed: bool,
+        fail_closed_toolsets: Set[str],
     ) -> None:
         self.name = name
         self.schema = schema
         self.handler = handler
         self.is_active = is_active
         self.is_async = is_async
+        self.fail_closed = fail_closed
+        self.fail_closed_toolsets = fail_closed_toolsets
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +239,8 @@ class ToolRegistry:
         handler: Callable,
         is_active: Callable[[], bool],
         is_async: bool = False,
+        fail_closed: bool = False,
+        fail_closed_toolsets: Set[str] | None = None,
     ) -> None:
         """Register a context-scoped schema/handler override for *name*.
 
@@ -242,6 +256,8 @@ class ToolRegistry:
                 handler=handler,
                 is_active=is_active,
                 is_async=is_async,
+                fail_closed=fail_closed,
+                fail_closed_toolsets=set(fail_closed_toolsets or set()),
             )
             self._generation += 1
 
@@ -269,6 +285,27 @@ class ToolRegistry:
         if override is None or not self._context_override_is_active(override):
             return None
         return override
+
+    def _inactive_fail_closed_context_override(
+        self,
+        name: str,
+        requested_toolsets: Set[str] | None = None,
+    ) -> ToolContextOverride | None:
+        with self._lock:
+            override = self._context_overrides.get(name)
+        if (
+            override is None
+            or self._context_override_is_active(override)
+            or not override.fail_closed
+        ):
+            return None
+        if not override.fail_closed_toolsets or requested_toolsets is None:
+            return override
+        if requested_toolsets and requested_toolsets.issubset(
+            override.fail_closed_toolsets
+        ):
+            return override
+        return None
 
     def _context_override_is_active(self, override: ToolContextOverride) -> bool:
         try:
@@ -416,7 +453,13 @@ class ToolRegistry:
     # Schema retrieval
     # ------------------------------------------------------------------
 
-    def get_definitions(self, tool_names: Set[str], quiet: bool = False) -> List[dict]:
+    def get_definitions(
+        self,
+        tool_names: Set[str],
+        quiet: bool = False,
+        requested_toolsets: Set[str] | None = None,
+        requested_toolsets_by_tool: dict[str, Set[str]] | None = None,
+    ) -> List[dict]:
         """Return OpenAI-format tool schemas for the requested tool names.
 
         Only tools whose ``check_fn()`` returns True (or have no check_fn)
@@ -438,6 +481,20 @@ class ToolRegistry:
             if override is not None:
                 schema_with_name = {**override.schema, "name": name}
                 result.append({"type": "function", "function": schema_with_name})
+                continue
+            if self._inactive_fail_closed_context_override(
+                name,
+                requested_toolsets=(
+                    requested_toolsets_by_tool.get(name)
+                    if requested_toolsets_by_tool is not None
+                    else requested_toolsets
+                ),
+            ):
+                if not quiet:
+                    logger.debug(
+                        "Tool %s unavailable (inactive fail-closed context override)",
+                        name,
+                    )
                 continue
             entry = entries_by_name.get(name)
             if not entry:
@@ -483,6 +540,8 @@ class ToolRegistry:
         """
         entry = self.get_entry(name)
         override = self._active_context_override(name)
+        if override is None and self._inactive_fail_closed_context_override(name):
+            return json.dumps({"error": f"Tool unavailable outside active context: {name}"})
         if not entry and not override:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:

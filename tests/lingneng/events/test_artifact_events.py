@@ -1,5 +1,6 @@
 import json
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.events.bridge import (
     artifact_events_from_tool_result,
     dedupe_artifacts,
@@ -95,6 +96,29 @@ def test_invalid_artifacts_are_ignored():
     assert artifacts == [ARTIFACT]
 
 
+def test_artifact_events_enforce_settings_allowlist(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+
+    events, artifacts = artifact_events_from_tool_result(
+        tool_name="document_generation",
+        result=result_payload(
+            artifacts=[
+                {**ARTIFACT, "url": "https://evil.example.test/report.pdf"},
+                ARTIFACT,
+            ]
+        ),
+        settings=settings,
+    )
+
+    assert [event.artifact_id for event in events] == ["artifact-doc-1"]
+    assert artifacts == [ARTIFACT]
+
+
 def test_malformed_tool_result_is_ignored():
     events, artifacts = artifact_events_from_tool_result(
         tool_name="image_generation",
@@ -116,4 +140,25 @@ def test_final_answer_accepts_artifacts():
     event = final_answer(run_id="run-1", answer="完成", artifacts=[ARTIFACT])
 
     assert isinstance(event, FinalEvent)
+    assert event.model_dump(mode="json")["artifacts"] == [ARTIFACT]
+
+
+def test_final_answer_enforces_settings_allowlist(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+
+    event = final_answer(
+        run_id="run-1",
+        answer="完成",
+        artifacts=[
+            {**ARTIFACT, "url": "https://evil.example.test/report.pdf"},
+            ARTIFACT,
+        ],
+        settings=settings,
+    )
+
     assert event.model_dump(mode="json")["artifacts"] == [ARTIFACT]

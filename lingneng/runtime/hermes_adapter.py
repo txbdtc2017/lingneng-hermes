@@ -217,6 +217,7 @@ class HermesAgentRunAdapter:
                             artifact_events_from_tool_result(
                                 tool_name=tool_name,
                                 result=kwargs.get("result"),
+                                settings=self.settings,
                             )
                         )
                     if new_artifacts:
@@ -327,6 +328,7 @@ class HermesAgentRunAdapter:
                         else []
                     ),
                     artifacts=artifacts,
+                    settings=self.settings,
                 )
                 return
 

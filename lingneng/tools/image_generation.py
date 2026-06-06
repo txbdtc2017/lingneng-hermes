@@ -106,7 +106,7 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
             settings=settings,
         )
 
-    artifacts = _valid_artifact_dicts(result.artifacts)
+    artifacts = _valid_artifact_dicts(result.artifacts, settings=settings)
     if not artifacts:
         return _json_result(
             _public_result(

@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.tools.artifacts import artifact_from_public_dict, dedupe_artifacts
 
 
@@ -47,8 +48,20 @@ class ReserveRunResult:
 
 
 class LingNengRunStore:
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        settings: LingNengSettings | None = None,
+        artifact_url_allowed_hosts: list[str] | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
+        if artifact_url_allowed_hosts is not None:
+            self._artifact_url_allowed_hosts = list(artifact_url_allowed_hosts)
+        elif settings is not None:
+            self._artifact_url_allowed_hosts = list(settings.artifact_url_allowed_hosts)
+        else:
+            self._artifact_url_allowed_hosts = []
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -93,7 +106,10 @@ class LingNengRunStore:
 
         return ReserveRunResult(
             created=cursor.rowcount == 1,
-            record=_record_from_row(row),
+            record=_record_from_row(
+                row,
+                artifact_url_allowed_hosts=self._artifact_url_allowed_hosts,
+            ),
         )
 
     def mark_succeeded(
@@ -122,7 +138,10 @@ class LingNengRunStore:
                 (
                     RunStatus.SUCCEEDED.value,
                     answer,
-                    _dump_artifacts_json(artifacts),
+                    _dump_artifacts_json(
+                        artifacts,
+                        allowed_hosts=self._artifact_url_allowed_hosts,
+                    ),
                     _dump_json_list(citations),
                     _to_db_time(now),
                     _to_db_time(now),
@@ -173,7 +192,10 @@ class LingNengRunStore:
             ).fetchone()
         if row is None:
             return None
-        return _record_from_row(row)
+        return _record_from_row(
+            row,
+            artifact_url_allowed_hosts=self._artifact_url_allowed_hosts,
+        )
 
     def count_runs(self) -> int:
         with self._connect() as conn:
@@ -270,7 +292,11 @@ def _from_optional_db_time(value: str | None) -> datetime | None:
     return _from_db_time(value)
 
 
-def _record_from_row(row: sqlite3.Row) -> RunRecord:
+def _record_from_row(
+    row: sqlite3.Row,
+    *,
+    artifact_url_allowed_hosts: list[str] | None = None,
+) -> RunRecord:
     return RunRecord(
         session_key=row["session_key"],
         request_id=row["request_id"],
@@ -280,7 +306,10 @@ def _record_from_row(row: sqlite3.Row) -> RunRecord:
         error_code=row["error_code"],
         error_message=row["error_message"],
         citations=_dict_list_from_json(row["citations_json"]),
-        artifacts=_artifacts_from_json(row["artifacts_json"]),
+        artifacts=_artifacts_from_json(
+            row["artifacts_json"],
+            allowed_hosts=artifact_url_allowed_hosts,
+        ),
         created_at=_from_db_time(row["created_at"]),
         updated_at=_from_db_time(row["updated_at"]),
         completed_at=_from_optional_db_time(row["completed_at"]),
@@ -291,8 +320,15 @@ def _dump_json_list(value: list[Any] | None) -> str:
     return json.dumps(_jsonable(value or []), ensure_ascii=False)
 
 
-def _dump_artifacts_json(value: list[Any] | None) -> str:
-    return json.dumps(_valid_artifact_dicts(value or []), ensure_ascii=False)
+def _dump_artifacts_json(
+    value: list[Any] | None,
+    *,
+    allowed_hosts: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        _valid_artifact_dicts(value or [], allowed_hosts=allowed_hosts),
+        ensure_ascii=False,
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -315,18 +351,32 @@ def _dict_list_from_json(value: str | None) -> list[dict[str, Any]]:
     return [item for item in parsed if isinstance(item, dict)]
 
 
-def _artifacts_from_json(value: str | None) -> list[dict[str, Any]]:
-    return _valid_artifact_dicts(_dict_list_from_json(value))
+def _artifacts_from_json(
+    value: str | None,
+    *,
+    allowed_hosts: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    return _valid_artifact_dicts(
+        _dict_list_from_json(value),
+        allowed_hosts=allowed_hosts,
+    )
 
 
-def _valid_artifact_dicts(value: list[Any]) -> list[dict[str, Any]]:
+def _valid_artifact_dicts(
+    value: list[Any],
+    *,
+    allowed_hosts: list[str] | None = None,
+) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
     for item in value:
         jsonable_item = _jsonable(item)
         if not isinstance(jsonable_item, dict):
             continue
         try:
-            artifact = artifact_from_public_dict(jsonable_item)
+            artifact = artifact_from_public_dict(
+                jsonable_item,
+                allowed_hosts=allowed_hosts,
+            )
         except (TypeError, ValueError):
             continue
         artifacts.append(artifact.model_dump(mode="json"))

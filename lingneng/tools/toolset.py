@@ -33,6 +33,8 @@ registry.register_context_override(
     schema=TOOL_SCHEMAS["web_search"],
     handler=web_search_handler,
     is_active=is_lingneng_tool_context_active,
+    fail_closed=True,
+    fail_closed_toolsets={"lingneng"},
 )
 
 for _tool_name, _schema, _handler in iter_tool_entries():

@@ -89,6 +89,19 @@ def settings(tmp_path: Path) -> LingNengSettings:
     )
 
 
+def allowlist_settings(tmp_path: Path) -> LingNengSettings:
+    return LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_DOCUMENT_MAX_CONTENT_CHARS": "1000",
+            "LINGNENG_IMAGE_MAX_COUNT": "2",
+            "LINGNENG_WEB_SEARCH_DEFAULT_TOP_K": "2",
+            "LINGNENG_WEB_SEARCH_MAX_TOP_K": "3",
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+
+
 def small_output_settings(tmp_path: Path) -> LingNengSettings:
     return LingNengSettings.from_env(
         {
@@ -110,14 +123,15 @@ def _percent_encode(value: str, rounds: int) -> str:
 
 
 class FakeDocumentProvider:
-    def __init__(self) -> None:
+    def __init__(self, artifacts: list[dict[str, Any]] | None = None) -> None:
         self.request: Any = None
+        self.artifacts = artifacts if artifacts is not None else [DOC_ARTIFACT]
 
     def generate(self, request: Any) -> DocumentGenerationResult:
         self.request = request
         return DocumentGenerationResult(
             summary="PDF 文档生成完成",
-            artifacts=[DOC_ARTIFACT],
+            artifacts=self.artifacts,
             safe_output={"provider_job_id": "job-doc-1"},
             metadata={"template": "default"},
         )
@@ -138,14 +152,17 @@ class FakeImageProvider:
 
 
 class FakeChartProvider:
-    def __init__(self) -> None:
+    def __init__(self, artifacts: list[dict[str, Any]] | None = None) -> None:
         self.request: Any = None
+        self.artifacts = (
+            artifacts if artifacts is not None else [CHART_ARTIFACT_WRONG_SOURCE]
+        )
 
     def generate(self, request: Any) -> ChartVisualizationResult:
         self.request = request
         return ChartVisualizationResult(
             summary="图表生成完成",
-            artifacts=[CHART_ARTIFACT_WRONG_SOURCE],
+            artifacts=self.artifacts,
             metadata={"secret_token": "must-not-leak", "chart_rows": 2},
         )
 
@@ -262,6 +279,20 @@ class UnsafeWebSearchUrlProvider:
                     "snippet": "drop",
                 },
                 {
+                    "id": "encoded-authority-space",
+                    "title": "Encoded Authority Space",
+                    "url": "https://exa%20mple.com/file",
+                    "website": "exa mple.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "encoded-localhost",
+                    "title": "Encoded Localhost",
+                    "url": "https://local%68ost/file",
+                    "website": "localhost",
+                    "snippet": "drop",
+                },
+                {
                     "id": "safe",
                     "title": "Safe",
                     "url": "https://example.com/safe?download=1",
@@ -338,6 +369,38 @@ class OversizedWebSearchProvider:
         )
 
 
+class EncodedPublicPayloadDocumentProvider:
+    def generate(self, request: Any) -> DocumentGenerationResult:
+        del request
+        return DocumentGenerationResult(
+            summary="PDF 文档生成完成",
+            artifacts=[DOC_ARTIFACT],
+            safe_output={
+                "note": "api%5Fkey%3Dabc123",
+                "path": "%2FUsers%2Frotas%2Fsecret.pdf",
+            },
+            metadata={"auth": "Bearer%20abc123"},
+        )
+
+
+class EncodedWebSearchTextProvider:
+    def search(self, request: Any) -> WebSearchResult:
+        del request
+        return WebSearchResult(
+            summary="搜索完成",
+            sources=[
+                {
+                    "id": "encoded-text",
+                    "title": "api%5Fkey%3Dabc123",
+                    "url": "https://example.com/safe",
+                    "website": "example.com",
+                    "date": "2026-06-06",
+                    "snippet": "Bearer%20abc123 %2FUsers%2Frotas%2Fsecret.pdf",
+                }
+            ],
+        )
+
+
 def _oversized_public_payload() -> dict[str, Any]:
     huge = "OVERSIZED_RAW_CONTENT" * 500
     return {
@@ -375,6 +438,33 @@ def test_document_generation_returns_artifact_metadata_and_bounded_request(tmp_p
     assert "正文" not in safe_dump
 
 
+def test_document_generation_enforces_artifact_url_allowlist(tmp_path):
+    provider = FakeDocumentProvider(
+        artifacts=[{**DOC_ARTIFACT, "url": "https://evil.example.test/report.pdf"}]
+    )
+
+    with document_generation_context(allowlist_settings(tmp_path), provider=provider):
+        result = json.loads(
+            document_generation_handler({"instruction": "生成 PDF", "content": "正文"})
+        )
+
+    assert result["success"] is False
+    assert result["code"] == "DOCUMENT_GENERATION_NO_VALID_ARTIFACTS"
+    assert result["artifacts"] == []
+
+
+def test_document_generation_accepts_allowed_artifact_host(tmp_path):
+    provider = FakeDocumentProvider()
+
+    with document_generation_context(allowlist_settings(tmp_path), provider=provider):
+        result = json.loads(
+            document_generation_handler({"instruction": "生成 PDF", "content": "正文"})
+        )
+
+    assert result["success"] is True
+    assert result["artifacts"][0]["url"] == "https://files.example.test/report.pdf"
+
+
 def test_image_generation_clamps_count_to_settings(tmp_path):
     provider = FakeImageProvider()
 
@@ -394,6 +484,19 @@ def test_image_generation_clamps_count_to_settings(tmp_path):
     assert result["success"] is True
     assert provider.request.count == settings(tmp_path).image_max_count
     assert result["safe_output"]["requested_count"] == settings(tmp_path).image_max_count
+
+
+def test_image_generation_enforces_artifact_url_allowlist(tmp_path):
+    provider = FakeImageProvider(
+        artifacts=[{**IMAGE_ARTIFACT, "url": "https://evil.example.test/image.png"}]
+    )
+
+    with image_generation_context(allowlist_settings(tmp_path), provider=provider):
+        result = json.loads(image_generation_handler({"prompt": "生成配图"}))
+
+    assert result["success"] is False
+    assert result["code"] == "IMAGE_GENERATION_NO_VALID_ARTIFACTS"
+    assert result["artifacts"] == []
 
 
 def test_image_generation_partial_success_returns_valid_artifacts(tmp_path):
@@ -441,6 +544,24 @@ def test_chart_visualization_returns_image_artifact_with_chart_source(tmp_path):
     assert "must-not-leak" not in dumped
 
 
+def test_chart_visualization_enforces_artifact_url_allowlist(tmp_path):
+    provider = FakeChartProvider(
+        artifacts=[
+            {
+                **CHART_ARTIFACT_WRONG_SOURCE,
+                "url": "https://evil.example.test/chart.png",
+            }
+        ]
+    )
+
+    with chart_visualization_context(allowlist_settings(tmp_path), provider=provider):
+        result = json.loads(chart_visualization_handler({"instruction": "生成趋势图"}))
+
+    assert result["success"] is False
+    assert result["code"] == "CHART_VISUALIZATION_NO_VALID_ARTIFACTS"
+    assert result["artifacts"] == []
+
+
 def test_web_search_clamps_top_k_and_returns_public_sources_only(tmp_path):
     provider = FakeWebSearchProvider()
 
@@ -475,6 +596,36 @@ def test_web_search_clamps_top_k_and_returns_public_sources_only(tmp_path):
     assert "api_key" not in dumped
     assert "token" not in dumped
     assert "raw_payload" not in dumped
+
+
+def test_generation_public_output_percent_decodes_before_secret_checks(tmp_path):
+    with document_generation_context(
+        settings(tmp_path),
+        provider=EncodedPublicPayloadDocumentProvider(),
+    ):
+        result = json.loads(document_generation_handler({"instruction": "生成报告"}))
+
+    dumped = json.dumps(result, ensure_ascii=False).lower()
+    assert result["success"] is True
+    assert "api%5fkey" not in dumped
+    assert "bearer%20" not in dumped
+    assert "%2fusers%2frotas" not in dumped
+    assert "abc123" not in dumped
+    assert "/users/rotas" not in dumped
+
+
+def test_web_search_source_text_percent_decodes_before_secret_checks(tmp_path):
+    with web_search_context(settings(tmp_path), provider=EncodedWebSearchTextProvider()):
+        result = json.loads(web_search_handler({"query": "搜索"}))
+
+    dumped = json.dumps(result, ensure_ascii=False).lower()
+    assert result["success"] is True
+    assert len(result["safe_output"]["sources"]) == 1
+    assert "api%5fkey" not in dumped
+    assert "bearer%20" not in dumped
+    assert "%2fusers%2frotas" not in dumped
+    assert "abc123" not in dumped
+    assert "/users/rotas" not in dumped
 
 
 def test_web_search_rejects_decoded_local_path_and_redirect_credential_urls(

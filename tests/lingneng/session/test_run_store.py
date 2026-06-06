@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import Artifact
 from lingneng.session.run_store import LingNengRunStore, RunStatus
 
@@ -139,6 +140,45 @@ def test_invalid_stored_artifact_rows_are_filtered(tmp_path):
 
     assert record is not None
     assert record.artifacts == [ARTIFACT]
+
+
+def test_run_store_filters_artifacts_against_settings_allowlist(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+    store = LingNengRunStore(tmp_path / "runs.sqlite3", settings=settings)
+    first = store.reserve_run("session-a", "req-1")
+
+    store.mark_succeeded(
+        first.record.run_id,
+        answer="完成",
+        artifacts=[
+            {**ARTIFACT, "url": "https://evil.example.test/report.pdf"},
+            ARTIFACT,
+        ],
+    )
+    record = store.get_by_run_id(first.record.run_id)
+
+    assert record is not None
+    assert record.artifacts == [ARTIFACT]
+
+
+def test_run_store_rejects_private_artifact_hosts_without_settings(tmp_path):
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    first = store.reserve_run("session-a", "req-1")
+
+    store.mark_succeeded(
+        first.record.run_id,
+        answer="完成",
+        artifacts=[{**ARTIFACT, "url": "http://127.0.0.1/report.pdf"}],
+    )
+    record = store.get_by_run_id(first.record.run_id)
+
+    assert record is not None
+    assert record.artifacts == []
 
 
 def test_same_request_id_in_different_sessions_creates_separate_runs(tmp_path):

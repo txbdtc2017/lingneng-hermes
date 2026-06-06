@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from ipaddress import ip_address
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import Artifact
 
 
@@ -85,16 +87,45 @@ _SECRET_SEGMENT_MARKERS = frozenset(
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[a-zA-Z]:[\\/]")
 
 
-def artifact_from_public_dict(value: dict[str, Any]) -> Artifact:
-    return Artifact.model_validate(sanitize_artifact_public_dict(value))
+def artifact_from_public_dict(
+    value: dict[str, Any],
+    *,
+    settings: LingNengSettings | None = None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> Artifact:
+    return Artifact.model_validate(
+        sanitize_artifact_public_dict(
+            value,
+            settings=settings,
+            allowed_hosts=allowed_hosts,
+        )
+    )
 
 
-def sanitize_public_url(value: Any) -> str | None:
-    return _sanitize_public_url(value)
+def sanitize_public_url(
+    value: Any,
+    *,
+    settings: LingNengSettings | None = None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str | None:
+    return _sanitize_public_url(
+        value,
+        settings=settings,
+        allowed_hosts=allowed_hosts,
+    )
 
 
-def sanitize_strict_public_url(value: Any) -> str | None:
-    clean_url = _sanitize_public_url(value)
+def sanitize_strict_public_url(
+    value: Any,
+    *,
+    settings: LingNengSettings | None = None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str | None:
+    clean_url = _sanitize_public_url(
+        value,
+        settings=settings,
+        allowed_hosts=allowed_hosts,
+    )
     if clean_url is None or not isinstance(value, str):
         return None
     try:
@@ -109,13 +140,22 @@ def sanitize_strict_public_url(value: Any) -> str | None:
     return clean_url
 
 
-def sanitize_artifact_public_dict(value: dict[str, Any]) -> dict[str, Any]:
+def sanitize_artifact_public_dict(
+    value: dict[str, Any],
+    *,
+    settings: LingNengSettings | None = None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, item in value.items():
         if key not in _ARTIFACT_PUBLIC_FIELDS:
             continue
         if key == "url":
-            clean_url = _sanitize_public_url(item)
+            clean_url = _sanitize_public_url(
+                item,
+                settings=settings,
+                allowed_hosts=allowed_hosts,
+            )
             if clean_url:
                 sanitized[key] = clean_url
             continue
@@ -159,7 +199,16 @@ def dedupe_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _sanitize_public_url(value: Any) -> str | None:
+def stable_percent_decode(value: str, *, max_rounds: int = 5) -> tuple[str, bool]:
+    return _stable_percent_decode(value, max_rounds=max_rounds)
+
+
+def _sanitize_public_url(
+    value: Any,
+    *,
+    settings: LingNengSettings | None = None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str | None:
     if not isinstance(value, str):
         return None
     stripped = value.strip()
@@ -178,7 +227,23 @@ def _sanitize_public_url(value: Any) -> str | None:
         return None
     if not parts.netloc or _has_whitespace_or_control(parts.netloc):
         return None
+    decoded_netloc, netloc_stable = _stable_percent_decode(parts.netloc)
+    if (
+        not netloc_stable
+        or decoded_netloc != parts.netloc
+        or _has_whitespace_or_control(decoded_netloc)
+        or _contains_url_credentials_fragment(f"{scheme}://{decoded_netloc}")
+    ):
+        return None
     if parts.username or parts.password:
+        return None
+    host = _url_host(stripped)
+    if not host or _is_disallowed_public_host(host):
+        return None
+    normalized_allowed_hosts = _normalized_allowed_hosts(
+        _configured_allowed_hosts(settings=settings, allowed_hosts=allowed_hosts)
+    )
+    if normalized_allowed_hosts and host not in normalized_allowed_hosts:
         return None
     decoded_path, path_stable = _stable_percent_decode(parts.path)
     if (
@@ -311,6 +376,67 @@ def _contains_secret_marker(value: str) -> bool:
 
 def _contains_url_credentials_fragment(value: str) -> bool:
     return _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None
+
+
+def _configured_allowed_hosts(
+    *,
+    settings: LingNengSettings | None,
+    allowed_hosts: list[str] | tuple[str, ...] | set[str] | None,
+) -> list[str] | tuple[str, ...] | set[str]:
+    if allowed_hosts is not None:
+        return allowed_hosts
+    if settings is not None:
+        return settings.artifact_url_allowed_hosts
+    return []
+
+
+def _normalized_allowed_hosts(
+    hosts: list[str] | tuple[str, ...] | set[str],
+) -> set[str]:
+    normalized: set[str] = set()
+    for host in hosts:
+        value = str(host).strip().lower()
+        if not value:
+            continue
+        if "://" in value:
+            parsed_host = _url_host(value)
+            if parsed_host:
+                normalized.add(parsed_host)
+            continue
+        value = value.split("/", 1)[0]
+        if value.startswith("[") and "]" in value:
+            value = value[1 : value.index("]")]
+        elif value.count(":") == 1:
+            value = value.split(":", 1)[0]
+        decoded, stable = _stable_percent_decode(value)
+        if not stable or decoded != value or _has_whitespace_or_control(decoded):
+            continue
+        normalized.add(decoded.rstrip("."))
+    return normalized
+
+
+def _url_host(value: str) -> str | None:
+    try:
+        host = urlsplit(value).hostname
+    except (AttributeError, ValueError):
+        return None
+    if not host:
+        return None
+    decoded, stable = _stable_percent_decode(host)
+    if not stable or decoded != host or _has_whitespace_or_control(decoded):
+        return None
+    return decoded.lower().rstrip(".")
+
+
+def _is_disallowed_public_host(host: str) -> bool:
+    normalized = host.strip().lower().rstrip(".")
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        parsed_ip = ip_address(normalized)
+    except ValueError:
+        return False
+    return not parsed_ip.is_global
 
 
 def _stable_percent_decode(value: str, *, max_rounds: int = 5) -> tuple[str, bool]:

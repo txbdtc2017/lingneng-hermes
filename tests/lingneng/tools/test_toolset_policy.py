@@ -140,6 +140,40 @@ def test_lingneng_tool_definitions_expose_only_lingneng_schemas(tmp_path):
     assert "limit" not in web_search_schema["parameters"]["properties"]
 
 
+def test_lingneng_web_search_definition_fails_closed_without_context(tmp_path):
+    del tmp_path
+
+    definitions = get_tool_definitions(
+        enabled_toolsets=["lingneng"],
+        disabled_toolsets=["kanban"],
+        quiet_mode=True,
+    )
+    names = {tool["function"]["name"] for tool in definitions}
+
+    assert names == APPROVED_LINGNENG_TOOLS - {"web_search"}
+
+
+def test_inactive_lingneng_web_search_dispatch_does_not_hit_hermes_handler(
+    monkeypatch,
+):
+    entry = registry.get_entry("web_search")
+    assert entry is not None
+    called = False
+
+    def hermes_probe(args, **kwargs):
+        nonlocal called
+        del args, kwargs
+        called = True
+        return json.dumps({"hermes_handler_called": True})
+
+    monkeypatch.setattr(entry, "handler", hermes_probe)
+
+    result = json.loads(registry.dispatch("web_search", {"query": "hello"}))
+
+    assert called is False
+    assert "error" in result
+
+
 def test_lingneng_toolset_ignores_registry_extra_tools(monkeypatch):
     probe_registry = ToolRegistry()
     for tool_name in APPROVED_LINGNENG_TOOLS:

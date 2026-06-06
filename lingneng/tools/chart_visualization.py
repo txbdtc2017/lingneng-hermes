@@ -107,6 +107,7 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
     artifacts = _valid_artifact_dicts(
         result.artifacts,
         overrides={"artifact_type": "image", "source": "chart_visualization"},
+        settings=settings,
     )
     if not artifacts:
         return _json_result(

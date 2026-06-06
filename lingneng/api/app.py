@@ -27,7 +27,8 @@ def create_app(
     resolved_settings = settings or LingNengSettings.from_env()
     resolved_adapter = adapter or _default_adapter(resolved_settings)
     resolved_store = run_store or LingNengRunStore(
-        resolved_settings.runtime_dir / "runs.sqlite3"
+        resolved_settings.runtime_dir / "runs.sqlite3",
+        settings=resolved_settings,
     )
 
     app = FastAPI(title="LingNeng Hermes API")

@@ -4,6 +4,7 @@ from urllib.parse import quote
 import pytest
 from pydantic import ValidationError
 
+from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import Artifact
 from lingneng.tools.artifacts import (
     artifact_from_public_dict,
@@ -42,6 +43,71 @@ def test_artifact_from_public_dict_accepts_java_fields():
     assert artifact.object_key == "external/java-agent-file/artifact-doc-1"
 
 
+def test_artifact_validation_enforces_allowed_hosts(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+
+    sanitized = sanitize_artifact_public_dict(
+        {**ARTIFACT, "url": "https://evil.example.test/report.pdf"},
+        settings=settings,
+    )
+
+    assert "url" not in sanitized
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized, settings=settings)
+
+
+def test_artifact_validation_accepts_allowed_public_host(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+        }
+    )
+
+    artifact = artifact_from_public_dict(ARTIFACT, settings=settings)
+
+    assert artifact.url == "https://files.example.test/report.pdf"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/report.pdf",
+        "http://10.1.2.3/report.pdf",
+        "http://172.16.0.1/report.pdf",
+        "http://192.168.1.1/report.pdf",
+        "http://169.254.169.254/latest/meta-data",
+        "http://localhost/report.pdf",
+        "http://[::1]/report.pdf",
+    ],
+)
+def test_artifact_validation_rejects_private_or_local_hosts_even_when_allowlisted(
+    tmp_path,
+    url,
+):
+    host = url.split("//", 1)[1].split("/", 1)[0].strip("[]")
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": host,
+        }
+    )
+
+    sanitized = sanitize_artifact_public_dict(
+        {**ARTIFACT, "url": url},
+        settings=settings,
+    )
+
+    assert "url" not in sanitized
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized, settings=settings)
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -61,6 +127,22 @@ def test_artifact_sanitizer_strips_unsafe_urls(url):
     assert "file://" not in dumped
     assert "local://" not in dumped
     assert "/Users/rotas" not in dumped
+    with pytest.raises(ValidationError):
+        artifact_from_public_dict(sanitized)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://files.example.test%20.evil.test/report.pdf",
+        "https://files.example.test%0a.evil.test/report.pdf",
+        "https://local%68ost/report.pdf",
+    ],
+)
+def test_artifact_sanitizer_decodes_authority_before_checks(url):
+    sanitized = sanitize_artifact_public_dict({**ARTIFACT, "url": url})
+
+    assert "url" not in sanitized
     with pytest.raises(ValidationError):
         artifact_from_public_dict(sanitized)
 

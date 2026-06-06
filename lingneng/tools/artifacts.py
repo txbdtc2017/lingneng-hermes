@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 from lingneng.schemas.chat_events import Artifact
 
@@ -49,14 +49,37 @@ _SECRET_QUERY_PARTS = (
     "x-amz",
 )
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
-_LOCAL_PATH_FRAGMENT_RE = re.compile(
-    r"(?:^|[\s=:\"'(\[{,])(?:~[\\/]|/[^\s\"'<>|]+|[a-zA-Z]:[\\/])"
+_UNIX_LOCAL_PATH_FRAGMENT_RE = re.compile(
+    r"(?<![A-Za-z0-9._-])/(?:Users|home|private|tmp|var|etc|opt|root)\b"
 )
-_SECRET_MARKER_RE = re.compile(
+_WINDOWS_PATH_FRAGMENT_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
+_URL_CREDENTIALS_FRAGMENT_RE = re.compile(r"://[^/?#\s:@]+:[^/?#\s:@]+@")
+_SECRET_ASSIGNMENT_RE = re.compile(
     r"(?:^|[^a-z0-9])("
     + "|".join(re.escape(marker) for marker in _SECRET_QUERY_PARTS)
-    + r")(?:$|[^a-z0-9])",
+    + r"(?:-[a-z0-9_-]+)?)\s*[:=]",
     re.IGNORECASE,
+)
+_BEARER_TOKEN_RE = re.compile(
+    r"(?:^|[^a-z0-9])bearer\s+\S+",
+    re.IGNORECASE,
+)
+_SECRET_SEGMENT_MARKERS = frozenset(
+    {
+        "access_key",
+        "access_token",
+        "api_key",
+        "authorization",
+        "bearer",
+        "credential",
+        "password",
+        "passwd",
+        "secret",
+        "signature",
+        "token",
+        "x-amz",
+        "x-amz-signature",
+    }
 )
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[a-zA-Z]:[\\/]")
 
@@ -147,14 +170,17 @@ def _sanitize_object_key(value: Any) -> str | None:
     stripped = value.strip()
     if not stripped:
         return None
+    decoded = unquote(stripped)
     if (
         _CONTROL_CHAR_RE.search(stripped)
+        or _CONTROL_CHAR_RE.search(decoded)
         or _looks_like_local_path(stripped)
-        or _contains_embedded_local_path(stripped)
-        or _contains_secret_marker(stripped)
+        or _looks_like_local_path(decoded)
+        or _contains_embedded_local_path(decoded)
+        or _contains_secret_marker(decoded)
     ):
         return None
-    if _has_path_traversal(stripped):
+    if _has_path_traversal(decoded):
         return None
     return stripped
 
@@ -165,10 +191,12 @@ def _strip_control_chars(value: str) -> str:
 
 def _sanitize_public_string(value: str) -> str | None:
     clean_text = _strip_control_chars(value).strip()
+    decoded = unquote(clean_text)
     if (
         _looks_like_local_path(clean_text)
-        or _contains_embedded_local_path(clean_text)
-        or _contains_secret_marker(clean_text)
+        or _looks_like_local_path(decoded)
+        or _contains_embedded_local_path(decoded)
+        or _contains_secret_marker(decoded)
     ):
         return None
     return clean_text
@@ -192,7 +220,8 @@ def _contains_embedded_local_path(value: str) -> bool:
     return (
         "file://" in lowered
         or "local://" in lowered
-        or _LOCAL_PATH_FRAGMENT_RE.search(value) is not None
+        or _WINDOWS_PATH_FRAGMENT_RE.search(value) is not None
+        or _UNIX_LOCAL_PATH_FRAGMENT_RE.search(value) is not None
     )
 
 
@@ -204,13 +233,41 @@ def _has_path_traversal(value: str) -> bool:
 def _query_looks_secret(query: str) -> bool:
     if not query:
         return False
-    if _contains_secret_marker(query):
+    decoded_query = unquote(query)
+    if (
+        _CONTROL_CHAR_RE.search(decoded_query)
+        or _contains_embedded_local_path(decoded_query)
+        or _contains_url_credentials_fragment(decoded_query)
+        or _contains_secret_marker(decoded_query)
+    ):
         return True
     for key, value in parse_qsl(query, keep_blank_values=True):
-        if _contains_secret_marker(key) or _contains_secret_marker(value):
+        decoded_key = unquote(key)
+        decoded_value = unquote(value)
+        if (
+            _CONTROL_CHAR_RE.search(decoded_key)
+            or _CONTROL_CHAR_RE.search(decoded_value)
+            or _contains_embedded_local_path(decoded_key)
+            or _contains_embedded_local_path(decoded_value)
+            or _contains_url_credentials_fragment(decoded_key)
+            or _contains_url_credentials_fragment(decoded_value)
+            or _contains_secret_marker(decoded_key)
+            or _contains_secret_marker(decoded_value)
+        ):
             return True
     return False
 
 
 def _contains_secret_marker(value: str) -> bool:
-    return _SECRET_MARKER_RE.search(value) is not None
+    lowered = value.lower()
+    if _SECRET_ASSIGNMENT_RE.search(lowered) or _BEARER_TOKEN_RE.search(lowered):
+        return True
+    segments = re.split(r"[/\\?&#\s]+", lowered)
+    return any(
+        segment in _SECRET_SEGMENT_MARKERS or segment.startswith("x-amz-")
+        for segment in segments
+    )
+
+
+def _contains_url_credentials_fragment(value: str) -> bool:
+    return _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None

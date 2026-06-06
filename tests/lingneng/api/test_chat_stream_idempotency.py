@@ -18,6 +18,19 @@ from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
 
 INTERNAL_KEY = "key"
+ARTIFACT = {
+    "artifact_id": "a-1",
+    "artifact_type": "document",
+    "source": "document_generation",
+    "file_name": "report.pdf",
+    "mime_type": "application/pdf",
+    "url": "https://files.example.test/report.pdf",
+    "object_key": "external/java-agent-file/a-1",
+    "format": "pdf",
+    "target_format": "pdf",
+    "conversion_required": False,
+    "conversion_owner": None,
+}
 
 
 def settings(tmp_path) -> LingNengSettings:
@@ -64,7 +77,7 @@ class CountingSuccessAdapter:
             run_id=run_id,
             status="succeeded",
             answer="完成",
-            artifacts=[{"artifact_id": "a-1"}],
+            artifacts=[ARTIFACT],
         )
 
 
@@ -159,7 +172,7 @@ def test_repeated_success_replays_stored_sse_without_adapter(tmp_path):
     assert frames[1][1]["text"] == "完成"
     assert frames[2][1]["status"] == "succeeded"
     assert frames[2][1]["answer"] == "完成"
-    assert frames[2][1]["artifacts"] == [{"artifact_id": "a-1"}]
+    assert frames[2][1]["artifacts"] == [ARTIFACT]
     assert adapter.calls == 1
 
 

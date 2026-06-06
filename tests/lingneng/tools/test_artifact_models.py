@@ -62,7 +62,9 @@ def test_artifact_sanitizer_strips_unsafe_urls(url):
     [
         "/Users/rotas/secret.pdf",
         "../secret.pdf",
+        "external/java-agent-file/%2e%2e/report.pdf",
         "external/java-agent-file/../secret.pdf",
+        r"external/java-agent-file/C:\Users\rotas\report.pdf",
         "external/java-agent-file/\x00secret.pdf",
     ],
 )
@@ -74,6 +76,40 @@ def test_artifact_sanitizer_strips_unsafe_object_keys(object_key):
     assert "/Users/rotas" not in dumped
     with pytest.raises(ValidationError):
         artifact_from_public_dict(sanitized)
+
+
+@pytest.mark.parametrize(
+    ("query", "forbidden"),
+    [
+        ("file=/Users/rotas/report.pdf&download=1", "/Users"),
+        ("redirect=https://user:pass@files.example.test/report.pdf", "user:pass"),
+    ],
+)
+def test_artifact_sanitizer_removes_url_query_with_unsafe_value(query, forbidden):
+    unsafe = {**ARTIFACT, "url": f"https://files.example.test/report.pdf?{query}"}
+
+    sanitized = sanitize_artifact_public_dict(unsafe)
+    artifact = artifact_from_public_dict(sanitized)
+
+    assert sanitized["url"] == "https://files.example.test/report.pdf"
+    assert artifact.url == "https://files.example.test/report.pdf"
+    dumped = json.dumps(sanitized, ensure_ascii=False)
+    assert forbidden not in dumped
+    assert query not in dumped
+
+
+def test_artifact_sanitizer_keeps_policy_file_names_with_secret_words():
+    value = {
+        **ARTIFACT,
+        "file_name": "password-policy.pdf",
+        "object_key": "artifacts/artifact-doc-1/password-policy.pdf",
+    }
+
+    sanitized = sanitize_artifact_public_dict(value)
+    artifact = artifact_from_public_dict(sanitized)
+
+    assert artifact.file_name == "password-policy.pdf"
+    assert artifact.object_key == "artifacts/artifact-doc-1/password-policy.pdf"
 
 
 @pytest.mark.parametrize(

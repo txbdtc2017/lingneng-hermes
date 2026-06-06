@@ -26,6 +26,8 @@ APPROVED_LINGNENG_TOOLS = {
     "write_workspace",
 }
 
+STUB_ONLY_TOOLS = APPROVED_LINGNENG_TOOLS - {"retrieve_rag"}
+
 DISALLOWED_HERMES_TOOLS = {
     "terminal",
     "web_search",
@@ -167,7 +169,7 @@ def test_lingneng_stub_handlers_return_not_configured_shape():
         "token",
         "secret",
     }
-    for tool_name in APPROVED_LINGNENG_TOOLS:
+    for tool_name in STUB_ONLY_TOOLS:
         result = json.loads(handler_for(tool_name)({"query": "hello"}))
         dispatched = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
         assert result["success"] is False
@@ -177,3 +179,11 @@ def test_lingneng_stub_handlers_return_not_configured_shape():
         assert "not configured" in result["message"].lower()
         assert forbidden_keys.isdisjoint(result)
         assert dispatched == result
+
+
+def test_retrieve_rag_registered_handler_is_not_phase_3_stub():
+    result = json.loads(registry.dispatch("retrieve_rag", {"query": "hello"}))
+
+    assert result["success"] is False
+    assert result["tool_name"] == "retrieve_rag"
+    assert result.get("phase") != "phase_3_stub"

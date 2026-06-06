@@ -18,6 +18,10 @@ LINGNENG_TOOL_NAMES = (
     "write_workspace",
 )
 
+STUB_TOOL_NAMES = tuple(
+    tool_name for tool_name in LINGNENG_TOOL_NAMES if tool_name != "retrieve_rag"
+)
+
 
 def _string(description: str) -> dict[str, Any]:
     return {"type": "string", "description": description}
@@ -51,7 +55,7 @@ def _object_schema(
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "retrieve_rag": _object_schema(
         "retrieve_rag",
-        "Retrieve LingNeng business knowledge. Phase 3 returns NOT_CONFIGURED.",
+        "Retrieve LingNeng business knowledge through the configured RAG provider.",
         {
             "query": _string("Business question to retrieve context for."),
             "top_k": _integer("Maximum number of references to retrieve.", minimum=1),
@@ -169,5 +173,5 @@ def handler_for(tool_name: str) -> Callable[[dict[str, Any]], str]:
 
 
 def iter_tool_entries() -> Iterator[tuple[str, dict[str, Any], Callable[[dict[str, Any]], str]]]:
-    for tool_name in LINGNENG_TOOL_NAMES:
+    for tool_name in STUB_TOOL_NAMES:
         yield tool_name, TOOL_SCHEMAS[tool_name], handler_for(tool_name)

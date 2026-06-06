@@ -221,6 +221,27 @@ TOOLSETS = {
         "tools": [],
         "includes": []
     },
+
+    "lingneng": {
+        "description": (
+            "LingNeng Java API business toolset. Phase 3 exposes only "
+            "LingNeng-owned NOT_CONFIGURED stubs; real business adapters "
+            "land in later phases."
+        ),
+        "tools": [
+            "retrieve_rag",
+            "list_skills",
+            "search_skills",
+            "read_skill",
+            "read_skill_resource",
+            "document_generation",
+            "image_generation",
+            "chart_visualization",
+            "read_workspace",
+            "write_workspace",
+        ],
+        "includes": [],
+    },
     
     "session_search": {
         "description": "Search and recall past conversations with summarization",

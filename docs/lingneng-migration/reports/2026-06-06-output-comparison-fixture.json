@@ -1,0 +1,547 @@
+{
+  "schema_version": "2026-06-06.task8.2.v1",
+  "status_values": [
+    "pending",
+    "pass",
+    "fail",
+    "deferred"
+  ],
+  "scenario_types": [
+    "no_tool",
+    "rag",
+    "artifact",
+    "attachment",
+    "long_conversation"
+  ],
+  "required_evidence": [
+    "sanitized_java_compatible_request_summary",
+    "sse_event_order",
+    "tool_call_policy_result",
+    "citation_summary",
+    "artifact_summary",
+    "trace_summary",
+    "evaluator_notes",
+    "final_decision"
+  ],
+  "cases": [
+    {
+      "case_id": "cmp_boss_assistant_no_tool_001",
+      "employee_type": "boss_assistant",
+      "scenario_type": "no_tool",
+      "request": {
+        "request_id": "req_cmp_boss_no_tool_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_boss_001",
+        "conversation_id": "conversation_cmp_boss_001",
+        "query": {
+          "content": "Synthetic placeholder request for boss assistant no-tool comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_boss_assistant_placeholder",
+          "employee_type": "boss_assistant"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": null,
+        "history": [],
+        "attachments": [],
+        "options": {
+          "comparison_mode": "placeholder"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": false,
+        "allowed_tools": [],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [],
+        "notes": "Pending evaluator confirmation; no execution payload or service result is captured here."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "notes": "Placeholder only; record a sanitized trace summary later."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    },
+    {
+      "case_id": "cmp_operation_specialist_rag_001",
+      "employee_type": "operation_specialist",
+      "scenario_type": "rag",
+      "request": {
+        "request_id": "req_cmp_operation_rag_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_operation_001",
+        "conversation_id": "conversation_cmp_operation_001",
+        "query": {
+          "content": "Synthetic placeholder request for operation specialist RAG comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_operation_specialist_placeholder",
+          "employee_type": "operation_specialist"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": {
+          "skill_id": "skill_placeholder_operation_rag"
+        },
+        "history": [],
+        "attachments": [],
+        "options": {
+          "comparison_mode": "placeholder",
+          "rag_fixture": "pending"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "agent_step",
+        "citation_delta",
+        "rag_context",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": true,
+        "allowed_tools": [
+          "retrieve_rag"
+        ],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [
+          {
+            "tool_name": "retrieve_rag",
+            "status": "pending",
+            "evidence": "sanitized citation and RAG context summary"
+          }
+        ],
+        "notes": "RAG evidence is pending; this fixture does not store live service output."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "notes": "Placeholder only; record citation counts and source ids after sanitization."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    },
+    {
+      "case_id": "cmp_marketing_planner_artifact_001",
+      "employee_type": "marketing_planner",
+      "scenario_type": "artifact",
+      "request": {
+        "request_id": "req_cmp_marketing_planner_artifact_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_marketing_planner_001",
+        "conversation_id": "conversation_cmp_marketing_planner_001",
+        "query": {
+          "content": "Synthetic placeholder request for marketing planner artifact comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_marketing_planner_placeholder",
+          "employee_type": "marketing_planner"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": {
+          "skill_id": "skill_placeholder_marketing_plan"
+        },
+        "history": [],
+        "attachments": [],
+        "options": {
+          "comparison_mode": "placeholder",
+          "artifact_fixture": "pending"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "agent_step",
+        "artifact_created",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": true,
+        "allowed_tools": [
+          "document_generation",
+          "chart_visualization"
+        ],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [
+          {
+            "tool_name": "document_generation",
+            "status": "pending",
+            "evidence": "sanitized artifact metadata"
+          }
+        ],
+        "notes": "Artifact metadata is pending; this fixture does not store generated content."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "notes": "Placeholder only; record artifact ids and event counts after sanitization."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    },
+    {
+      "case_id": "cmp_marketing_content_creator_attachment_001",
+      "employee_type": "marketing_content_creator",
+      "scenario_type": "attachment",
+      "request": {
+        "request_id": "req_cmp_marketing_content_attachment_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_marketing_content_001",
+        "conversation_id": "conversation_cmp_marketing_content_001",
+        "query": {
+          "content": "Synthetic placeholder request for marketing content attachment comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_marketing_content_creator_placeholder",
+          "employee_type": "marketing_content_creator"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": {
+          "skill_id": "skill_placeholder_content_attachment"
+        },
+        "history": [],
+        "attachments": [
+          {
+            "attachment_id": "attachment_placeholder_001",
+            "file_name": "placeholder_input.pdf",
+            "mime_type": "application/pdf",
+            "object_key": "placeholder_attachment_object"
+          }
+        ],
+        "options": {
+          "comparison_mode": "placeholder",
+          "attachment_fixture": "pending"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "agent_step",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": true,
+        "allowed_tools": [
+          "attachment_understanding"
+        ],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [
+          {
+            "tool_name": "attachment_understanding",
+            "status": "pending",
+            "evidence": "sanitized attachment summary"
+          }
+        ],
+        "notes": "Attachment evidence is pending; no signed link or parsed content is stored."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "notes": "Placeholder only; record attachment handling counts after sanitization."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    },
+    {
+      "case_id": "cmp_member_operator_long_conversation_001",
+      "employee_type": "member_operator",
+      "scenario_type": "long_conversation",
+      "request": {
+        "request_id": "req_cmp_member_long_conversation_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_member_001",
+        "conversation_id": "conversation_cmp_member_001",
+        "query": {
+          "content": "Synthetic placeholder request for member operator long conversation comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_member_operator_placeholder",
+          "employee_type": "member_operator"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": {
+          "skill_id": "skill_placeholder_member_operation"
+        },
+        "history": [],
+        "attachments": [],
+        "options": {
+          "comparison_mode": "placeholder",
+          "prior_turns_source": "pending_sanitized_session_setup"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": false,
+        "allowed_tools": [],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [],
+        "notes": "Long conversation evidence is pending; compare continuity through sanitized trace summary only."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "compression_observed": null,
+        "notes": "Placeholder only; record compression and continuity evidence after sanitization."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    },
+    {
+      "case_id": "cmp_product_combo_advisor_no_tool_001",
+      "employee_type": "product_combo_advisor",
+      "scenario_type": "no_tool",
+      "request": {
+        "request_id": "req_cmp_product_combo_no_tool_001",
+        "tenant_id": "tenant_placeholder_alpha",
+        "user_id": "user_placeholder_eval",
+        "session_id": "session_cmp_product_combo_001",
+        "conversation_id": "conversation_cmp_product_combo_001",
+        "query": {
+          "content": "Synthetic placeholder request for product combo advisor no-tool comparison; not real business data."
+        },
+        "employee": {
+          "employee_id": "employee_product_combo_advisor_placeholder",
+          "employee_type": "product_combo_advisor"
+        },
+        "system_prompt": {
+          "content": "Synthetic placeholder system prompt for migration comparison setup."
+        },
+        "skill": null,
+        "history": [],
+        "attachments": [],
+        "options": {
+          "comparison_mode": "placeholder"
+        },
+        "stream_options": {
+          "include_citations": true,
+          "include_rag_context": true,
+          "include_trace_summary": true
+        }
+      },
+      "expected_event_order": [
+        "run_started",
+        "answer_delta",
+        "final"
+      ],
+      "expected_tool_policy": {
+        "tool_calls_expected": false,
+        "allowed_tools": [],
+        "forbidden_tools": [
+          "terminal",
+          "code_execution",
+          "browser_automation",
+          "arbitrary_file_access"
+        ],
+        "placeholder_tool_calls": [],
+        "notes": "Pending evaluator confirmation; no execution payload or service result is captured here."
+      },
+      "lingnengai_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "lingneng_hermes_output": {
+        "status": "pending",
+        "answer_text": "",
+        "captured_events": [],
+        "notes": "Placeholder only; fill after a sanitized comparison run."
+      },
+      "citations": [],
+      "artifacts": [],
+      "trace_summary": {
+        "status": "pending",
+        "run_id": "",
+        "event_order_observed": [],
+        "tool_call_count": null,
+        "history_count": null,
+        "notes": "Placeholder only; record a sanitized trace summary later."
+      },
+      "evaluator_notes": {
+        "status": "pending",
+        "notes": "",
+        "questions": []
+      },
+      "status": "pending"
+    }
+  ]
+}

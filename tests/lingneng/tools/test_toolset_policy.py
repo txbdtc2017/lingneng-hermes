@@ -166,17 +166,20 @@ def test_lingneng_toolset_ignores_registry_extra_tools(monkeypatch):
         handler=lambda args, **kwargs: "{}",
     )
 
-    monkeypatch.setattr("tools.registry.registry", probe_registry)
-    monkeypatch.setattr(model_tools, "registry", probe_registry)
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr("tools.registry.registry", probe_registry)
+        patch_context.setattr(model_tools, "registry", probe_registry)
+        model_tools._clear_tool_defs_cache()
 
-    assert set(resolve_toolset("lingneng")) == APPROVED_LINGNENG_TOOLS
+        assert set(resolve_toolset("lingneng")) == APPROVED_LINGNENG_TOOLS
 
-    definitions = get_tool_definitions(
-        enabled_toolsets=["lingneng"],
-        disabled_toolsets=["kanban"],
-        quiet_mode=True,
-    )
-    names = {tool["function"]["name"] for tool in definitions}
+        definitions = get_tool_definitions(
+            enabled_toolsets=["lingneng"],
+            disabled_toolsets=["kanban"],
+            quiet_mode=True,
+        )
+        names = {tool["function"]["name"] for tool in definitions}
+    model_tools._clear_tool_defs_cache()
 
     assert "lingneng_extra_probe" not in names
     assert names == APPROVED_LINGNENG_TOOLS

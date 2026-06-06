@@ -90,6 +90,8 @@ _PUBLIC_MESSAGE_BY_CODE = {
     ),
     "WEB_SEARCH_PROVIDER_ERROR": "LingNeng web search provider failed.",
 }
+_MAX_PUBLIC_DEPTH = 4
+_MAX_PUBLIC_ITEMS = 20
 
 
 class DocumentGenerationRequest(BaseModel):
@@ -146,7 +148,8 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="skipped",
                 summary="Document generation provider is not configured.",
                 code="NOT_CONFIGURED",
-            )
+            ),
+            settings=settings,
         )
 
     raw_args = args or {}
@@ -161,7 +164,8 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="failed",
                 summary="Document generation provider failed.",
                 code="DOCUMENT_GENERATION_PROVIDER_ERROR",
-            )
+            ),
+            settings=settings,
         )
 
     artifacts = _valid_artifact_dicts(result.artifacts)
@@ -173,7 +177,8 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="failed",
                 summary="Document generation returned no valid artifacts.",
                 code="DOCUMENT_GENERATION_NO_VALID_ARTIFACTS",
-            )
+            ),
+            settings=settings,
         )
 
     safe_output = {
@@ -195,7 +200,8 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
             safe_output=safe_output,
             artifacts=artifacts,
             metadata=metadata,
-        )
+        ),
+        settings=settings,
     )
 
 
@@ -322,14 +328,40 @@ def _sanitize_mapping(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sanitize_public_value(value: Any) -> Any:
+    return _sanitize_public_value_at_depth(value, depth=0)
+
+
+def _sanitize_public_value_at_depth(value: Any, *, depth: int) -> Any:
+    if depth >= _MAX_PUBLIC_DEPTH:
+        return {"truncated": True, "reason": "max_depth"}
     if isinstance(value, dict):
-        return {
-            str(key): _sanitize_public_value(item)
-            for key, item in value.items()
-            if not _is_forbidden_key(key)
-        }
+        sanitized: dict[str, Any] = {}
+        omitted_count = 0
+        items = list(value.items())
+        for index, (key, item) in enumerate(items[:_MAX_PUBLIC_ITEMS]):
+            if _is_forbidden_key(key):
+                omitted_count += 1
+                continue
+            sanitized[str(key)] = _sanitize_public_value_at_depth(
+                item,
+                depth=depth + 1,
+            )
+        omitted_count += max(0, len(items) - _MAX_PUBLIC_ITEMS)
+        if omitted_count:
+            sanitized["truncated"] = True
+            sanitized["omitted_count"] = omitted_count
+        return sanitized
     if isinstance(value, list | tuple):
-        return [_sanitize_public_value(item) for item in value]
+        sanitized_list = [
+            _sanitize_public_value_at_depth(item, depth=depth + 1)
+            for item in list(value)[:_MAX_PUBLIC_ITEMS]
+        ]
+        omitted_count = max(0, len(value) - _MAX_PUBLIC_ITEMS)
+        if omitted_count:
+            sanitized_list.append(
+                {"truncated": True, "omitted_count": omitted_count}
+            )
+        return sanitized_list
     if isinstance(value, str):
         return _sanitize_public_text(value, max_chars=1000)
     if value is None or isinstance(value, bool | int | float):
@@ -379,5 +411,41 @@ def _contains_embedded_local_path(value: str) -> bool:
     )
 
 
-def _json_result(value: dict[str, Any]) -> str:
-    return json.dumps(value, ensure_ascii=False)
+def _json_result(
+    value: dict[str, Any],
+    *,
+    settings: LingNengSettings | None = None,
+) -> str:
+    if settings is None:
+        return json.dumps(value, ensure_ascii=False)
+
+    max_chars = max(500, settings.tool_result_max_chars)
+    serialized = json.dumps(value, ensure_ascii=False)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    bounded = dict(value)
+    safe_output = bounded.get("safe_output")
+    metadata = bounded.get("metadata")
+    omitted_count = _count_public_items(safe_output) + _count_public_items(metadata)
+    bounded["safe_output"] = {
+        "truncated": True,
+        "omitted_count": _count_public_items(safe_output),
+    }
+    bounded["metadata"] = {
+        "truncated": True,
+        "omitted_count": omitted_count,
+        "tool_result_max_chars": max_chars,
+    }
+    serialized = json.dumps(bounded, ensure_ascii=False)
+    return serialized
+
+
+def _count_public_items(value: Any) -> int:
+    if isinstance(value, dict):
+        return len(value)
+    if isinstance(value, list | tuple):
+        return len(value)
+    if value:
+        return 1
+    return 0

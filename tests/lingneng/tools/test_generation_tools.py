@@ -5,7 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import model_tools
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.chart_visualization import (
     ChartVisualizationResult,
@@ -85,6 +87,26 @@ def settings(tmp_path: Path) -> LingNengSettings:
             "LINGNENG_WEB_SEARCH_MAX_TOP_K": "3",
         }
     )
+
+
+def small_output_settings(tmp_path: Path) -> LingNengSettings:
+    return LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_DOCUMENT_MAX_CONTENT_CHARS": "1000",
+            "LINGNENG_IMAGE_MAX_COUNT": "2",
+            "LINGNENG_TOOL_RESULT_MAX_CHARS": "1000",
+            "LINGNENG_WEB_SEARCH_DEFAULT_TOP_K": "3",
+            "LINGNENG_WEB_SEARCH_MAX_TOP_K": "5",
+        }
+    )
+
+
+def _percent_encode(value: str, rounds: int) -> str:
+    encoded = value
+    for _ in range(rounds):
+        encoded = quote(encoded, safe="")
+    return encoded
 
 
 class FakeDocumentProvider:
@@ -196,6 +218,119 @@ class ExplodingProvider:
     def search(self, request: Any) -> Any:
         del request
         raise RuntimeError("traceback secret-token /Users/rotas/private")
+
+
+class UnsafeWebSearchUrlProvider:
+    def search(self, request: Any) -> WebSearchResult:
+        del request
+        return WebSearchResult(
+            summary="搜索完成",
+            sources=[
+                {
+                    "id": "local-query",
+                    "title": "Local Query",
+                    "url": "https://example.com/page?file=/Users/rotas/secret.pdf",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "credential-redirect",
+                    "title": "Credential Redirect",
+                    "url": "https://example.com/page?redirect=https://user:pass@internal.example/secret",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "encoded-local-path",
+                    "title": "Encoded Local Path",
+                    "url": "https://example.com/files/%2FUsers%2Frotas%2Fsecret.pdf",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "path-traversal",
+                    "title": "Traversal",
+                    "url": "https://example.com/files/../secret.pdf",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "multi-encoded-traversal",
+                    "title": "Multi Encoded",
+                    "url": f"https://example.com/files/{_percent_encode('../secret.pdf', 6)}",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "safe",
+                    "title": "Safe",
+                    "url": "https://example.com/safe?download=1",
+                    "website": "example.com",
+                    "snippet": "keep",
+                },
+            ],
+        )
+
+
+class OversizedDocumentProvider:
+    def generate(self, request: Any) -> DocumentGenerationResult:
+        del request
+        return DocumentGenerationResult(
+            summary="PDF 文档生成完成",
+            artifacts=[DOC_ARTIFACT],
+            safe_output=_oversized_public_payload(),
+            metadata=_oversized_public_payload(),
+        )
+
+
+class OversizedImageProvider:
+    def generate(self, request: Any) -> ImageGenerationResult:
+        del request
+        return ImageGenerationResult(
+            summary="图片生成完成",
+            artifacts=[IMAGE_ARTIFACT],
+            safe_output=_oversized_public_payload(),
+            metadata=_oversized_public_payload(),
+        )
+
+
+class OversizedChartProvider:
+    def generate(self, request: Any) -> ChartVisualizationResult:
+        del request
+        return ChartVisualizationResult(
+            summary="图表生成完成",
+            artifacts=[CHART_ARTIFACT_WRONG_SOURCE],
+            safe_output=_oversized_public_payload(),
+            metadata=_oversized_public_payload(),
+        )
+
+
+class OversizedWebSearchProvider:
+    def search(self, request: Any) -> WebSearchResult:
+        del request
+        return WebSearchResult(
+            summary="搜索完成",
+            sources=[
+                {
+                    "id": "safe",
+                    "title": "Safe",
+                    "url": "https://example.com/safe",
+                    "website": "example.com",
+                    "snippet": "keep",
+                }
+            ],
+            safe_output=_oversized_public_payload(),
+            metadata=_oversized_public_payload(),
+        )
+
+
+def _oversized_public_payload() -> dict[str, Any]:
+    huge = "OVERSIZED_RAW_CONTENT" * 500
+    return {
+        "huge": huge,
+        "items": [{"text": huge, "index": index} for index in range(100)],
+        "nested": {"huge": huge, "values": [huge for _ in range(100)]},
+    }
 
 
 def test_document_generation_returns_artifact_metadata_and_bounded_request(tmp_path):
@@ -328,6 +463,79 @@ def test_web_search_clamps_top_k_and_returns_public_sources_only(tmp_path):
     assert "raw_payload" not in dumped
 
 
+def test_web_search_rejects_decoded_local_path_and_redirect_credential_urls(
+    tmp_path,
+):
+    with web_search_context(settings(tmp_path), provider=UnsafeWebSearchUrlProvider()):
+        result = json.loads(web_search_handler({"query": "搜索", "top_k": 10}))
+
+    assert result["success"] is True
+    sources = result["safe_output"]["sources"]
+    assert [source["url"] for source in sources] == [
+        "https://example.com/safe?download=1"
+    ]
+    dumped = json.dumps(result, ensure_ascii=False).lower()
+    assert "/users/rotas" not in dumped
+    assert "%2fusers" not in dumped
+    assert "../" not in dumped
+    assert "user:pass" not in dumped
+    assert "internal.example" not in dumped
+
+
+def test_generation_tool_results_are_bounded_by_public_budget(tmp_path):
+    cfg = small_output_settings(tmp_path)
+    checks = [
+        (
+            document_generation_context,
+            document_generation_handler,
+            OversizedDocumentProvider(),
+            {"instruction": "生成报告", "content": "正文"},
+            "document_generation",
+        ),
+        (
+            image_generation_context,
+            image_generation_handler,
+            OversizedImageProvider(),
+            {"prompt": "生成图片"},
+            "image_generation",
+        ),
+        (
+            chart_visualization_context,
+            chart_visualization_handler,
+            OversizedChartProvider(),
+            {"instruction": "生成图表"},
+            "chart_visualization",
+        ),
+        (
+            web_search_context,
+            web_search_handler,
+            OversizedWebSearchProvider(),
+            {"query": "搜索"},
+            "web_search",
+        ),
+    ]
+
+    for context, handler, provider, args, tool_name in checks:
+        with context(cfg, provider=provider):
+            raw_result = handler(args)
+        result = json.loads(raw_result)
+
+        assert len(raw_result) <= cfg.tool_result_max_chars
+        assert result["success"] is True
+        assert result["tool_name"] == tool_name
+        assert result["status"] == "succeeded"
+        assert result["summary"]
+        assert "artifacts" in result
+        assert "code" in result
+        assert "message" in result
+        dumped = json.dumps(result, ensure_ascii=False)
+        assert "OVERSIZED_RAW_CONTENT" not in dumped
+        assert (
+            result["metadata"].get("truncated") is True
+            or result["safe_output"].get("truncated") is True
+        )
+
+
 def test_provider_exceptions_return_safe_public_failures(tmp_path):
     provider = ExplodingProvider()
     checks = [
@@ -431,6 +639,8 @@ def test_lingneng_web_search_does_not_override_hermes_web_search():
         "assert entry.toolset == 'web'\n"
         "assert entry.handler.__module__ == 'tools.web_tools'\n"
         "entry.check_fn = lambda: True\n"
+        "import model_tools\n"
+        "model_tools._clear_tool_defs_cache()\n"
         "defs = get_tool_definitions(enabled_toolsets=['web'], disabled_toolsets=['kanban'], quiet_mode=True)\n"
         "schema = [item['function'] for item in defs if item['function']['name'] == 'web_search'][0]\n"
         "props = set(schema['parameters']['properties'])\n"
@@ -452,34 +662,41 @@ def test_lingneng_web_search_does_not_override_hermes_web_search():
 
 def test_lingneng_web_search_schema_context_does_not_pollute_hermes_web_schema(
     tmp_path,
+    monkeypatch,
 ):
     import lingneng.tools.toolset  # noqa: F401
     entry = registry.get_entry("web_search")
     assert entry is not None
-    entry.check_fn = lambda: True
+    original_check_fn = entry.check_fn
+    monkeypatch.setattr(entry, "check_fn", lambda: True)
+    model_tools._clear_tool_defs_cache()
 
-    with lingneng_tool_context(settings(tmp_path)):
-        lingneng_defs = get_tool_definitions(
-            enabled_toolsets=["lingneng"],
+    try:
+        with lingneng_tool_context(settings(tmp_path)):
+            lingneng_defs = get_tool_definitions(
+                enabled_toolsets=["lingneng"],
+                disabled_toolsets=["kanban"],
+                quiet_mode=True,
+            )
+            lingneng_schema = next(
+                item["function"]
+                for item in lingneng_defs
+                if item["function"]["name"] == "web_search"
+            )
+
+        web_defs = get_tool_definitions(
+            enabled_toolsets=["web"],
             disabled_toolsets=["kanban"],
             quiet_mode=True,
         )
-        lingneng_schema = next(
+        web_schema = next(
             item["function"]
-            for item in lingneng_defs
+            for item in web_defs
             if item["function"]["name"] == "web_search"
         )
-
-    web_defs = get_tool_definitions(
-        enabled_toolsets=["web"],
-        disabled_toolsets=["kanban"],
-        quiet_mode=True,
-    )
-    web_schema = next(
-        item["function"]
-        for item in web_defs
-        if item["function"]["name"] == "web_search"
-    )
+    finally:
+        monkeypatch.setattr(entry, "check_fn", original_check_fn)
+        model_tools._clear_tool_defs_cache()
 
     assert "top_k" in lingneng_schema["parameters"]["properties"]
     assert "limit" in web_schema["parameters"]["properties"]

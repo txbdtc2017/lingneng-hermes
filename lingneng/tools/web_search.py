@@ -4,13 +4,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Protocol
-from urllib.parse import parse_qsl, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.tools.artifacts import sanitize_strict_public_url
 from lingneng.tools.document_generation import (
-    _CONTROL_CHAR_RE,
     _bounded_text,
     _coerce_result,
     _json_result,
@@ -33,22 +33,6 @@ _LINGNENG_TOOL_CONTEXT_ACTIVE: ContextVar[bool] = ContextVar(
     "lingneng_tool_context_active",
     default=False,
 )
-_SECRET_QUERY_PARTS = (
-    "access_key",
-    "access_token",
-    "api_key",
-    "authorization",
-    "bearer",
-    "credential",
-    "password",
-    "passwd",
-    "secret",
-    "signature",
-    "token",
-    "x-amz",
-)
-
-
 class WebSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -121,7 +105,8 @@ def web_search_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str
                 status="skipped",
                 summary="Web search provider is not configured.",
                 code="NOT_CONFIGURED",
-            )
+            ),
+            settings=settings,
         )
 
     request = _build_search_request(args or {}, settings)
@@ -135,7 +120,8 @@ def web_search_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str
                 status="failed",
                 summary="Web search provider failed.",
                 code="WEB_SEARCH_PROVIDER_ERROR",
-            )
+            ),
+            settings=settings,
         )
 
     sources = _public_sources(result.sources, limit=request.top_k)
@@ -156,7 +142,8 @@ def web_search_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str
                 **result.metadata,
                 "source_count": len(sources),
             },
-        )
+        ),
+        settings=settings,
     )
 
 
@@ -236,48 +223,7 @@ def _public_sources(
 
 
 def _normalize_public_url(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    stripped = value.strip()
-    if not stripped or _CONTROL_CHAR_RE.search(stripped):
-        return None
-    try:
-        parts = urlsplit(stripped)
-    except ValueError:
-        return None
-    scheme = parts.scheme.lower()
-    if scheme not in {"http", "https"}:
-        return None
-    if not parts.netloc or _has_whitespace_or_control(parts.netloc):
-        return None
-    try:
-        hostname = parts.hostname
-    except ValueError:
-        return None
-    if not hostname or _has_whitespace_or_control(hostname):
-        return None
-    if parts.username or parts.password:
-        return None
-    query = "" if _query_looks_secret(parts.query) else parts.query
-    return urlunsplit((scheme, parts.netloc, parts.path, query, ""))
-
-
-def _has_whitespace_or_control(value: str) -> bool:
-    return any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)
-
-
-def _query_looks_secret(query: str) -> bool:
-    if not query:
-        return False
-    lowered_query = query.lower()
-    if any(part in lowered_query for part in _SECRET_QUERY_PARTS):
-        return True
-    for key, value in parse_qsl(query, keep_blank_values=True):
-        lowered_key = key.lower()
-        lowered_value = value.lower()
-        if any(part in lowered_key or part in lowered_value for part in _SECRET_QUERY_PARTS):
-            return True
-    return False
+    return sanitize_strict_public_url(value)
 
 
 def _sanitize_source_text(value: Any, *, max_chars: int) -> str:

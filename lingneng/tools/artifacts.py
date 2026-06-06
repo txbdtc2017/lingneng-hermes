@@ -89,6 +89,26 @@ def artifact_from_public_dict(value: dict[str, Any]) -> Artifact:
     return Artifact.model_validate(sanitize_artifact_public_dict(value))
 
 
+def sanitize_public_url(value: Any) -> str | None:
+    return _sanitize_public_url(value)
+
+
+def sanitize_strict_public_url(value: Any) -> str | None:
+    clean_url = _sanitize_public_url(value)
+    if clean_url is None or not isinstance(value, str):
+        return None
+    try:
+        parts = urlsplit(value.strip())
+    except ValueError:
+        return None
+    original_without_fragment = urlunsplit(
+        (parts.scheme.lower(), parts.netloc, parts.path, parts.query, "")
+    )
+    if clean_url != original_without_fragment:
+        return None
+    return clean_url
+
+
 def sanitize_artifact_public_dict(value: dict[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, item in value.items():

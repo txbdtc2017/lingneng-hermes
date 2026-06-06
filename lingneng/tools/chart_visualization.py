@@ -75,6 +75,7 @@ def chart_visualization_context(
 
 def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str:
     del kwargs
+    settings = _settings()
     provider = _CURRENT_PROVIDER.get()
     if provider is None:
         return _json_result(
@@ -84,7 +85,8 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="skipped",
                 summary="Chart visualization provider is not configured.",
                 code="NOT_CONFIGURED",
-            )
+            ),
+            settings=settings,
         )
 
     request = _build_chart_request(args or {})
@@ -98,7 +100,8 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="failed",
                 summary="Chart visualization provider failed.",
                 code="CHART_VISUALIZATION_PROVIDER_ERROR",
-            )
+            ),
+            settings=settings,
         )
 
     artifacts = _valid_artifact_dicts(
@@ -113,7 +116,8 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
                 status="failed",
                 summary="Chart visualization returned no valid artifacts.",
                 code="CHART_VISUALIZATION_NO_VALID_ARTIFACTS",
-            )
+            ),
+            settings=settings,
         )
 
     return _json_result(
@@ -131,8 +135,13 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
             },
             artifacts=artifacts,
             metadata={**result.metadata, "artifact_count": len(artifacts)},
-        )
+        ),
+        settings=settings,
     )
+
+
+def _settings() -> LingNengSettings:
+    return _CURRENT_SETTINGS.get() or LingNengSettings.from_env()
 
 
 def _build_chart_request(raw_args: dict[str, Any]) -> ChartVisualizationRequest:

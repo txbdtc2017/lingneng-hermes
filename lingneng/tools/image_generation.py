@@ -80,7 +80,8 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
                 status="skipped",
                 summary="Image generation provider is not configured.",
                 code="NOT_CONFIGURED",
-            )
+            ),
+            settings=settings,
         )
 
     raw_args = args or {}
@@ -101,7 +102,8 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
                 status="failed",
                 summary="Image generation provider failed.",
                 code="IMAGE_GENERATION_PROVIDER_ERROR",
-            )
+            ),
+            settings=settings,
         )
 
     artifacts = _valid_artifact_dicts(result.artifacts)
@@ -113,7 +115,8 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
                 status="failed",
                 summary="Image generation returned no valid artifacts.",
                 code="IMAGE_GENERATION_NO_VALID_ARTIFACTS",
-            )
+            ),
+            settings=settings,
         )
 
     return _json_result(
@@ -132,7 +135,8 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
             },
             artifacts=artifacts,
             metadata={**result.metadata, "artifact_count": len(artifacts)},
-        )
+        ),
+        settings=settings,
     )
 
 

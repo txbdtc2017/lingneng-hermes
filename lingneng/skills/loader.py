@@ -63,7 +63,18 @@ class LingNengSkillLoader:
         packages: dict[str, LoadedSkillPackage] = {}
         warnings: list[SkillPromptWarning] = []
         for root in self.settings.skill_roots:
-            if not root.exists():
+            try:
+                root_exists = root.exists()
+                root_is_dir = root.is_dir()
+            except OSError:
+                warnings.append(
+                    SkillPromptWarning(
+                        code="SKILL_ROOT_INVALID",
+                        message="Configured skill root could not be inspected.",
+                    )
+                )
+                continue
+            if not root_exists:
                 warnings.append(
                     SkillPromptWarning(
                         code="SKILL_ROOT_MISSING",
@@ -71,7 +82,7 @@ class LingNengSkillLoader:
                     )
                 )
                 continue
-            if not root.is_dir():
+            if not root_is_dir:
                 warnings.append(
                     SkillPromptWarning(
                         code="SKILL_ROOT_INVALID",
@@ -79,7 +90,17 @@ class LingNengSkillLoader:
                     )
                 )
                 continue
-            for skill_file in self._iter_skill_files(root):
+            try:
+                skill_files = self._iter_skill_files(root)
+            except OSError:
+                warnings.append(
+                    SkillPromptWarning(
+                        code="SKILL_ROOT_INVALID",
+                        message="Configured skill root could not be scanned.",
+                    )
+                )
+                continue
+            for skill_file in skill_files:
                 try:
                     package = self._load_package(skill_file)
                 except SkillPackageError as exc:
@@ -88,6 +109,15 @@ class LingNengSkillLoader:
                             code=exc.code,
                             message=str(exc),
                             package_name=exc.package_name,
+                        )
+                    )
+                    continue
+                except Exception:
+                    warnings.append(
+                        SkillPromptWarning(
+                            code="SKILL_PACKAGE_INVALID",
+                            message="Skill package could not be loaded.",
+                            package_name=skill_file.parent.name,
                         )
                     )
                     continue
@@ -210,7 +240,6 @@ class LingNengSkillLoader:
                 SkillPromptWarning(
                     code="SELECTED_SKILL_NOT_FOUND",
                     message="Selected skill_id does not match a configured package.",
-                    package_name=skill_id,
                 )
             )
             return None
@@ -282,7 +311,7 @@ def _metadata_from_front_matter(front_matter: dict[str, Any]) -> SkillPackageMet
     payload = {
         "name": front_matter.get("name"),
         "description": front_matter.get("description"),
-        "version": str(front_matter.get("version", "")),
+        "version": front_matter.get("version"),
         "lingneng": lingneng_data,
     }
     try:

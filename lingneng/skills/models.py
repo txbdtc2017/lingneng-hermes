@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+_SAFE_WARNING_PACKAGE_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class SkillPackageError(RuntimeError):
@@ -58,7 +62,7 @@ class SkillPackageMetadata(BaseModel):
 
     name: str
     description: str
-    version: str
+    version: str = Field(min_length=1)
     lingneng: LingNengSkillMetadata
 
 
@@ -170,7 +174,7 @@ class SkillPromptContext(BaseModel):
         if self.warnings:
             warning_lines = ["### Skill Warnings"]
             for warning in self.warnings:
-                package = f" [{warning.package_name}]" if warning.package_name else ""
+                package = _safe_warning_package_label(warning.package_name)
                 warning_lines.append(f"- {warning.code}{package}: {warning.message}")
             sections.append("\n".join(warning_lines))
         if not sections:
@@ -181,3 +185,11 @@ class SkillPromptContext(BaseModel):
         marker = "\n...[truncated]"
         limit = max(0, self.prompt_max_chars - len(marker))
         return text[:limit].rstrip() + marker
+
+
+def _safe_warning_package_label(package_name: str | None) -> str:
+    if not package_name:
+        return ""
+    if not _SAFE_WARNING_PACKAGE_PATTERN.fullmatch(package_name):
+        return ""
+    return f" [{package_name}]"

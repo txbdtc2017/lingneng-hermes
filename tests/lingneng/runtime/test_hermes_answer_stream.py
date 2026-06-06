@@ -1,5 +1,9 @@
+import threading
+import time
+
 import pytest
 
+import lingneng.runtime.hermes_adapter as hermes_adapter_module
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.schemas.chat_events import (
@@ -81,6 +85,41 @@ class ToolProgressAgent:
             result='{"success": false, "code": "NOT_CONFIGURED"}',
         )
         return {"final_response": "完成", "messages": []}
+
+
+class ConcurrentToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        worker_count = 8
+        barrier = threading.Barrier(worker_count)
+        threads = [
+            threading.Thread(
+                target=self._emit_tool_progress,
+                args=(barrier, index),
+            )
+            for index in range(worker_count)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise AssertionError("tool progress worker did not finish")
+        return {"final_response": "完成", "messages": []}
+
+    def _emit_tool_progress(self, barrier: threading.Barrier, index: int) -> None:
+        barrier.wait(timeout=5)
+        self.tool_progress_callback(
+            "tool.completed",
+            f"retrieve_rag_{index}",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result="{}",
+        )
 
 
 def request_and_session():
@@ -172,3 +211,37 @@ async def test_tool_progress_callback_becomes_agent_step_events(tmp_path):
     assert agent_steps[1].summary == "Duration: 0.25s"
     assert isinstance(events[-1], FinalEvent)
     assert events[-1].answer == "完成"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_tool_progress_events_keep_ordered_unique_sequences(
+    tmp_path,
+    monkeypatch,
+):
+    original_agent_step_completed = hermes_adapter_module.agent_step_completed
+
+    def delayed_agent_step_completed(*args, **kwargs):
+        sequence = kwargs.get("sequence", args[0] if args else 0)
+        time.sleep((9 - sequence) * 0.001)
+        return original_agent_step_completed(*args, **kwargs)
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "agent_step_completed",
+        delayed_agent_step_completed,
+    )
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(
+        settings(tmp_path),
+        agent_cls=ConcurrentToolProgressAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    agent_steps = [event for event in events if isinstance(event, AgentStepEvent)]
+
+    assert [event.sequence for event in agent_steps] == list(range(1, 9))
+    assert [event.step_id for event in agent_steps] == [
+        f"tool-{sequence}" for sequence in range(1, 9)
+    ]
+    assert len({event.sequence for event in agent_steps}) == 8
+    assert len({event.step_id for event in agent_steps}) == 8

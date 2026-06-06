@@ -96,6 +96,7 @@ class HermesAgentRunAdapter:
         loop = asyncio.get_running_loop()
         sequence = 0
         tool_sequence = 0
+        tool_progress_lock = threading.Lock()
         streamed_text: list[str] = []
 
         def on_delta(text: str | None) -> None:
@@ -117,32 +118,33 @@ class HermesAgentRunAdapter:
             **kwargs,
         ) -> None:
             nonlocal tool_sequence
-            if event_name == "tool.started":
-                tool_sequence += 1
-                event = agent_step_started(
-                    sequence=tool_sequence,
-                    tool_name=tool_name,
-                    preview=preview,
-                )
-            elif event_name == "tool.completed":
-                tool_sequence += 1
-                event = agent_step_completed(
-                    sequence=tool_sequence,
-                    tool_name=tool_name,
-                    duration=kwargs.get("duration"),
-                    is_error=bool(kwargs.get("is_error")),
-                    result=kwargs.get("result"),
-                )
-            elif event_name in {"tool.skipped", "tool.blocked"}:
-                tool_sequence += 1
-                event = agent_step_skipped(
-                    sequence=tool_sequence,
-                    tool_name=tool_name,
-                    reason=kwargs.get("reason"),
-                )
-            else:
-                return
-            loop.call_soon_threadsafe(queue.put_nowait, event)
+            with tool_progress_lock:
+                if event_name == "tool.started":
+                    tool_sequence += 1
+                    event = agent_step_started(
+                        sequence=tool_sequence,
+                        tool_name=tool_name,
+                        preview=preview,
+                    )
+                elif event_name == "tool.completed":
+                    tool_sequence += 1
+                    event = agent_step_completed(
+                        sequence=tool_sequence,
+                        tool_name=tool_name,
+                        duration=kwargs.get("duration"),
+                        is_error=bool(kwargs.get("is_error")),
+                        result=kwargs.get("result"),
+                    )
+                elif event_name in {"tool.skipped", "tool.blocked"}:
+                    tool_sequence += 1
+                    event = agent_step_skipped(
+                        sequence=tool_sequence,
+                        tool_name=tool_name,
+                        reason=kwargs.get("reason"),
+                    )
+                else:
+                    return
+                loop.call_soon_threadsafe(queue.put_nowait, event)
 
         def run_agent() -> _ThreadResult:
             try:

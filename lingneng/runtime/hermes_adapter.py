@@ -254,10 +254,27 @@ class HermesAgentRunAdapter:
                         resolved_session
                     )
                     with lingneng_tool_context(self.settings):
+                        _emit_attachment_started(
+                            request=request,
+                            on_tool_progress=on_tool_progress,
+                        )
+                        attachment_context = build_attachment_prompt_context(
+                            self.settings,
+                            request,
+                        )
+                        _emit_attachment_finished(
+                            attachment_context,
+                            request=request,
+                            on_tool_progress=on_tool_progress,
+                        )
+                        ephemeral_system_prompt = _compose_ephemeral_system_message(
+                            attachment_context.prompt_text
+                        )
                         agent = self._build_agent(
                             resolved_session,
                             stream_delta_callback=on_delta,
                             tool_progress_callback=on_tool_progress,
+                            ephemeral_system_prompt=ephemeral_system_prompt,
                         )
                         self._last_agent_for_tests = agent
                         rag_context = build_rag_request_context(
@@ -265,25 +282,13 @@ class HermesAgentRunAdapter:
                             request=request,
                             resolved_session=resolved_session,
                         )
-                        attachment_context = build_attachment_prompt_context(
-                            self.settings,
-                            request,
-                        )
-                        _emit_attachment_progress(
-                            attachment_context,
-                            request=request,
-                            on_tool_progress=on_tool_progress,
-                        )
                         with rag_request_context(
                             rag_context,
                             provider=_build_rag_provider(self.settings),
                         ):
                             result = agent.run_conversation(
                                 request.query.content,
-                                system_message=self._build_system_message(
-                                    request,
-                                    attachment_prompt=attachment_context.prompt_text,
-                                ),
+                                system_message=self._build_system_message(request),
                                 conversation_history=history,
                                 task_id=run_id,
                                 persist_user_message=request.query.content,
@@ -336,6 +341,7 @@ class HermesAgentRunAdapter:
         resolved_session: ResolvedSessionKey,
         stream_delta_callback=None,
         tool_progress_callback=None,
+        ephemeral_system_prompt: str = "",
     ):
         import lingneng.tools.toolset  # noqa: F401
 
@@ -343,6 +349,7 @@ class HermesAgentRunAdapter:
             platform="lingneng",
             session_id=resolved_session.session_key,
             session_db=self.session_store.db,
+            ephemeral_system_prompt=ephemeral_system_prompt,
             enabled_toolsets=["lingneng"],
             disabled_toolsets=["kanban"],
             quiet_mode=True,
@@ -357,14 +364,11 @@ class HermesAgentRunAdapter:
     def _build_system_message(
         self,
         request: ChatStreamRequest,
-        *,
-        attachment_prompt: str = "",
     ) -> str:
         skill_prompt = _skill_prompt_text(self.skill_loader, request)
         return _compose_system_message(
             request.system_prompt.content,
             skill_prompt,
-            attachment_prompt,
         )
 
 
@@ -406,8 +410,7 @@ def _skill_prompt_text(
         )
 
 
-def _emit_attachment_progress(
-    attachment_context: AttachmentPromptContext,
+def _emit_attachment_started(
     *,
     request: ChatStreamRequest,
     on_tool_progress,
@@ -420,6 +423,16 @@ def _emit_attachment_progress(
         None,
         {"attachment_count": len(request.attachments)},
     )
+
+
+def _emit_attachment_finished(
+    attachment_context: AttachmentPromptContext,
+    *,
+    request: ChatStreamRequest,
+    on_tool_progress,
+) -> None:
+    if not request.attachments:
+        return
     if attachment_context.status == "succeeded":
         on_tool_progress(
             "tool.completed",
@@ -452,11 +465,15 @@ def _emit_attachment_progress(
 def _compose_system_message(
     base_prompt: str,
     skill_prompt: str,
-    attachment_prompt: str = "",
 ) -> str:
     parts = [base_prompt.strip()]
     if skill_prompt.strip():
         parts.append(skill_prompt.strip())
+    return "\n\n".join(part for part in parts if part)
+
+
+def _compose_ephemeral_system_message(attachment_prompt: str = "") -> str:
+    parts = []
     if attachment_prompt.strip():
         parts.append(attachment_prompt.strip())
     parts.append(_MINIMAL_RAG_GUIDANCE)

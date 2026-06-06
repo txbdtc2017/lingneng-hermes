@@ -131,9 +131,15 @@ class CapturingAgent:
 
 class RecordingSystemPromptAgent:
     system_message_seen = ""
+    ephemeral_system_prompt_seen = ""
+    init_kwargs_seen: dict = {}
 
     def __init__(self, **kwargs):
         self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        type(self).ephemeral_system_prompt_seen = (
+            kwargs.get("ephemeral_system_prompt") or ""
+        )
+        type(self).init_kwargs_seen = kwargs
 
     def run_conversation(
         self,
@@ -148,6 +154,33 @@ class RecordingSystemPromptAgent:
         return {"final_response": "完成", "messages": []}
 
 
+class PersistingSystemPromptAgent(RecordingSystemPromptAgent):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.session_db = kwargs["session_db"]
+        self.session_id = kwargs["session_id"]
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        self.session_db.ensure_session(self.session_id, source="lingneng-test")
+        self.session_db.update_system_prompt(self.session_id, system_message or "")
+        return super().run_conversation(
+            user_message,
+            system_message=system_message,
+            conversation_history=conversation_history,
+            task_id=task_id,
+            stream_callback=stream_callback,
+            persist_user_message=persist_user_message,
+        )
+
+
 class FakeAttachmentProvider:
     def __init__(self, result):
         self.result = result
@@ -158,6 +191,32 @@ class FakeAttachmentProvider:
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
+
+
+class BlockingAttachmentProvider:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.finished = threading.Event()
+        self.release = threading.Event()
+
+    def process(self, request):
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("blocking attachment provider was not released")
+        self.finished.set()
+        return AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+
+
+def effective_system_prompt(agent_cls=RecordingSystemPromptAgent) -> str:
+    parts = [
+        agent_cls.system_message_seen.strip(),
+        agent_cls.ephemeral_system_prompt_seen.strip(),
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 class KanbanEnvProbeAgent:
@@ -403,7 +462,7 @@ async def test_hermes_adapter_injects_bounded_skill_prompt(tmp_path):
     events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
     assert isinstance(events[-1], FinalEvent)
-    prompt = RecordingSystemPromptAgent.system_message_seen
+    prompt = effective_system_prompt()
     java_index = prompt.index("你是灵能营销内容员工。")
     skill_index = prompt.index("## LingNeng Skill Context")
     rag_index = prompt.index("## LingNeng RAG Guidance")
@@ -461,17 +520,78 @@ async def test_attachment_context_is_added_to_current_system_prompt_only(
 
     with attachment_processing_context(provider=provider):
         events = [event async for event in adapter.stream(request, resolved, "run-1")]
-    first_prompt = RecordingSystemPromptAgent.system_message_seen
+    first_system_prompt = RecordingSystemPromptAgent.system_message_seen
+    first_ephemeral_prompt = RecordingSystemPromptAgent.ephemeral_system_prompt_seen
+    first_prompt = effective_system_prompt()
     [event async for event in adapter.stream(second_request, resolved, "run-2")]
-    second_prompt = RecordingSystemPromptAgent.system_message_seen
+    second_system_prompt = RecordingSystemPromptAgent.system_message_seen
+    second_ephemeral_prompt = RecordingSystemPromptAgent.ephemeral_system_prompt_seen
+    second_prompt = effective_system_prompt()
 
     assert isinstance(events[-1], FinalEvent)
     assert "当前附件摘要" in first_prompt
     assert "## LingNeng Current Request Attachments" in first_prompt
+    assert "当前附件摘要" not in first_system_prompt
+    assert "## LingNeng Current Request Attachments" not in first_system_prompt
+    assert "## LingNeng RAG Guidance" not in first_system_prompt
+    assert "当前附件摘要" in first_ephemeral_prompt
+    assert "## LingNeng Current Request Attachments" in first_ephemeral_prompt
+    assert "## LingNeng RAG Guidance" in first_ephemeral_prompt
     assert "history content marker" not in first_prompt
     assert "当前附件摘要" not in second_prompt
     assert "## LingNeng Current Request Attachments" not in second_prompt
+    assert "## LingNeng RAG Guidance" not in second_system_prompt
+    assert "## LingNeng RAG Guidance" in second_ephemeral_prompt
     assert [req.attachments[0].file_id for req in provider.requests] == ["file-1"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_is_not_persisted_in_session_system_prompt(tmp_path):
+    payload = full_payload()
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.pdf",
+            "mime_type": "application/pdf",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.pdf",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    second_payload = full_payload()
+    second_payload["request_id"] = "req-no-attachment"
+    second_payload["attachments"] = []
+    second_request = ChatStreamRequest.model_validate(second_payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=PersistingSystemPromptAgent,
+    )
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        [event async for event in adapter.stream(request, resolved, "run-1")]
+    stored_prompt = adapter.session_store.db.get_session(resolved.session_key)[
+        "system_prompt"
+    ]
+    [event async for event in adapter.stream(second_request, resolved, "run-2")]
+    second_prompt = effective_system_prompt(PersistingSystemPromptAgent)
+
+    assert "## LingNeng Current Request Attachments" not in stored_prompt
+    assert "当前附件摘要" not in stored_prompt
+    assert "## LingNeng RAG Guidance" not in stored_prompt
+    assert "## LingNeng Current Request Attachments" not in second_prompt
+    assert "当前附件摘要" not in second_prompt
 
 
 @pytest.mark.asyncio
@@ -518,7 +638,7 @@ async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_pat
     with attachment_processing_context(provider=provider):
         [event async for event in adapter.stream(request, resolved, "run-1")]
 
-    prompt = RecordingSystemPromptAgent.system_message_seen
+    prompt = effective_system_prompt()
     skill_index = prompt.index("## LingNeng Skill Context")
     attachment_index = prompt.index("## LingNeng Current Request Attachments")
     rag_index = prompt.index("## LingNeng RAG Guidance")
@@ -554,6 +674,46 @@ async def test_attachment_processing_emits_started_and_completed_steps(tmp_path)
         if isinstance(event, AgentStepEvent) and event.title == "attachment_processing"
     ]
     assert [event.status for event in attachment_steps] == ["started", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_started_step_streams_before_provider_finishes(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+            LINGNENG_ATTACHMENT_TIMEOUT_SECONDS="5",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    provider = BlockingAttachmentProvider()
+
+    with attachment_processing_context(provider=provider):
+        stream = adapter.stream(request, resolved, "run-1")
+        try:
+            await anext(stream)
+            started_event = await asyncio.wait_for(anext(stream), timeout=0.25)
+
+            assert isinstance(started_event, AgentStepEvent)
+            assert started_event.title == "attachment_processing"
+            assert started_event.status == "started"
+            assert not provider.finished.is_set()
+
+            provider.release.set()
+            remaining = [event async for event in stream]
+        finally:
+            provider.release.set()
+            await stream.aclose()
+
+    attachment_steps = [
+        event
+        for event in remaining
+        if isinstance(event, AgentStepEvent) and event.title == "attachment_processing"
+    ]
+    assert [event.status for event in attachment_steps] == ["succeeded"]
 
 
 @pytest.mark.asyncio
@@ -706,10 +866,13 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
     [event async for event in adapter.stream(request, resolved, "run-1")]
 
     agent = adapter._last_agent_for_tests
+    kwargs = CapturingAgent.calls[0]
     assert agent.run_args["user_message"] == request.query.content
     assert agent.run_args["system_message"].startswith(request.system_prompt.content)
-    assert "## LingNeng RAG Guidance" in agent.run_args["system_message"]
+    assert "## LingNeng RAG Guidance" not in agent.run_args["system_message"]
+    assert "## LingNeng RAG Guidance" in kwargs["ephemeral_system_prompt"]
     assert "Java 历史" not in agent.run_args["system_message"]
+    assert "Java 历史" not in kwargs["ephemeral_system_prompt"]
     assert agent.run_args["persist_user_message"] == request.query.content
     assert agent.run_args["conversation_history"] == []
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import pytest
@@ -25,6 +26,21 @@ class FakeAttachmentProvider:
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
+
+
+class SleepingAttachmentProvider:
+    def __init__(self, sleep_seconds: float) -> None:
+        self.sleep_seconds = sleep_seconds
+        self.requests = []
+
+    def process(self, request):
+        self.requests.append(request)
+        time.sleep(self.sleep_seconds)
+        return AttachmentProcessingResult(
+            context_text="secret-token /Users/rotas/private",
+            selected_count=1,
+            processed_count=1,
+        )
 
 
 def settings(tmp_path, **overrides) -> LingNengSettings:
@@ -240,6 +256,27 @@ def test_attachment_timeout_like_provider_result_degrades_safely(tmp_path):
         )
 
     dumped = json.dumps(result.model_dump(), ensure_ascii=False)
+    assert result.prompt_text == ""
+    assert result.status == "failed"
+    assert "ATTACHMENT_PROVIDER_TIMEOUT" in warning_codes(result)
+    assert "secret-token" not in dumped
+    assert "/Users/rotas" not in dumped
+    assert "traceback" not in dumped.lower()
+
+
+def test_attachment_provider_call_is_wall_clock_timeout_bounded(tmp_path):
+    provider = SleepingAttachmentProvider(sleep_seconds=0.35)
+
+    with attachment_processing_context(provider=provider):
+        started_at = time.perf_counter()
+        result = build_attachment_prompt_context(
+            settings(tmp_path, LINGNENG_ATTACHMENT_TIMEOUT_SECONDS="0.1"),
+            request_with_attachments(attachment()),
+        )
+        elapsed = time.perf_counter() - started_at
+
+    dumped = json.dumps(result.model_dump(), ensure_ascii=False)
+    assert elapsed < 0.25
     assert result.prompt_text == ""
     assert result.status == "failed"
     assert "ATTACHMENT_PROVIDER_TIMEOUT" in warning_codes(result)

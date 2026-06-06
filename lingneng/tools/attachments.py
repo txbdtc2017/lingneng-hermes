@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -216,7 +218,22 @@ def build_attachment_prompt_context(
         context_max_chars=settings.attachment_context_max_chars,
     )
     try:
-        provider_result = _coerce_provider_result(provider.process(provider_request))
+        provider_result = _coerce_provider_result(
+            _process_with_timeout(
+                provider,
+                provider_request,
+                timeout_seconds=settings.attachment_timeout_seconds,
+            )
+        )
+    except FutureTimeoutError:
+        return _failed_context(
+            [
+                *warnings,
+                _warning("ATTACHMENT_PROVIDER_TIMEOUT"),
+            ],
+            selected_count=len(selected),
+            failed_count=len(selected),
+        )
     except ValidationError:
         return _failed_context(
             [
@@ -323,6 +340,26 @@ def _select_attachments(
 
         selected.append(_attachment_with_url(attachment, clean_url))
     return selected, warnings
+
+
+def _process_with_timeout(
+    provider: AttachmentProcessingProvider,
+    request: AttachmentProcessingRequest,
+    *,
+    timeout_seconds: float,
+) -> AttachmentProcessingResult | dict[str, Any]:
+    executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="lingneng-attachment-processing",
+    )
+    future = executor.submit(provider.process, request)
+    try:
+        return future.result(timeout=max(0.1, timeout_seconds))
+    except FutureTimeoutError:
+        future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _coerce_provider_result(value: Any) -> AttachmentProcessingResult:

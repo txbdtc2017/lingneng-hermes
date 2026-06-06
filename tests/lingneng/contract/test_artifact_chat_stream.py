@@ -79,6 +79,17 @@ class ContractArtifactAgent:
         return {"final_response": FINAL_ANSWER, "messages": []}
 
 
+class CountingAdapter:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+        self.stream_calls = 0
+
+    async def stream(self, *args, **kwargs):
+        self.stream_calls += 1
+        async for event in self.wrapped.stream(*args, **kwargs):
+            yield event
+
+
 def settings(tmp_path) -> LingNengSettings:
     return LingNengSettings.from_env(
         {
@@ -93,9 +104,11 @@ def settings(tmp_path) -> LingNengSettings:
 def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(tmp_path):
     ContractArtifactAgent.calls = 0
     resolved_settings = settings(tmp_path)
-    adapter = HermesAgentRunAdapter(
-        settings=resolved_settings,
-        agent_cls=ContractArtifactAgent,
+    adapter = CountingAdapter(
+        HermesAgentRunAdapter(
+            settings=resolved_settings,
+            agent_cls=ContractArtifactAgent,
+        )
     )
     store = LingNengRunStore(tmp_path / "runs.sqlite3")
     app = create_app(
@@ -134,10 +147,14 @@ def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(tmp_
     artifact_created = first_frames[3][1]
     first_final = first_frames[-1][1]
     persisted = store.get_by_run_id(first_final["run_id"])
+    assert _joined_answer_deltas(first_frames) == FINAL_ANSWER
+    assert first_final["answer"] == FINAL_ANSWER
+    assert first_final["status"] == "succeeded"
     assert artifact_created == ARTIFACT
     assert first_final["artifacts"] == [artifact_created]
     assert persisted is not None
     assert persisted.artifacts == [artifact_created]
+    assert adapter.stream_calls == 1
 
     second = client.post(
         "/internal/agent/chat/stream",
@@ -151,5 +168,13 @@ def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(tmp_
     assert second.status_code == 200
     assert second_event_names == ["run_started", "answer_delta", "final"]
     assert second_final["run_id"] == first_final["run_id"]
+    assert _joined_answer_deltas(second_frames) == FINAL_ANSWER
+    assert second_final["answer"] == FINAL_ANSWER
+    assert second_final["status"] == "succeeded"
     assert second_final["artifacts"] == first_final["artifacts"]
+    assert adapter.stream_calls == 1
     assert ContractArtifactAgent.calls == 1
+
+
+def _joined_answer_deltas(frames: list[tuple[str, dict]]) -> str:
+    return "".join(data["text"] for name, data in frames if name == "answer_delta")

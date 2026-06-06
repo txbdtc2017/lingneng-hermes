@@ -160,11 +160,12 @@ def rag_events_from_tool_result(
         )
 
     if include_rag_context:
+        context_text = _rag_context_text(payload)
         events.append(
             RagContextEvent(
-                context=_rag_context_text(payload),
+                context=context_text,
                 citations=valid_citations,
-                status=_rag_status(payload, valid_citations),
+                status=_rag_status(payload, valid_citations, context_text),
                 metadata=_rag_metadata(payload.get("metadata")),
             )
         )
@@ -243,13 +244,19 @@ def _valid_citations(value: Any) -> list[Citation]:
     return citations
 
 
-def _rag_status(payload: dict[str, Any], citations: list[Citation]) -> str:
+def _rag_status(
+    payload: dict[str, Any],
+    citations: list[Citation],
+    context_text: str,
+) -> str:
     if _is_failure_result(payload):
         return "failed"
     value = payload.get("status")
-    if value in {"hit", "empty", "failed"}:
-        return value
-    return "hit" if citations else "empty"
+    if value == "empty":
+        return "empty"
+    if value == "hit":
+        return "hit" if citations or context_text else "empty"
+    return "hit" if citations or context_text else "empty"
 
 
 def _rag_context_text(payload: dict[str, Any]) -> str:

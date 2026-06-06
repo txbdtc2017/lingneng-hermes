@@ -78,6 +78,25 @@ def test_rag_empty_emits_empty_context_only_when_requested():
     assert citations == []
 
 
+def test_rag_hit_with_no_public_context_or_citations_emits_empty_status():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            status="hit",
+            context="Authorization: Bearer abc123",
+            citations=[],
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [RagContextEvent]
+    assert events[0].context == ""
+    assert events[0].status == "empty"
+    assert events[0].citations == []
+    assert citations == []
+
+
 def test_rag_events_honor_stream_options():
     events, citations = rag_events_from_tool_result(
         tool_name="retrieve_rag",

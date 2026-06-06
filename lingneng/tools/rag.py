@@ -65,6 +65,8 @@ _CURRENT_PROVIDER: ContextVar[RagProvider | None] = ContextVar(
 )
 _FORBIDDEN_KEY_PARTS = (
     "api_key",
+    "authorization",
+    "bearer",
     "secret",
     "token",
     "traceback",
@@ -76,6 +78,8 @@ _FORBIDDEN_KEY_PARTS = (
 )
 _FORBIDDEN_TEXT_PARTS = (
     "api_key",
+    "authorization",
+    "bearer",
     "secret",
     "token",
     "traceback",

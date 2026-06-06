@@ -167,6 +167,42 @@ def test_retrieve_rag_success_metadata_is_sanitized(tmp_path):
     assert "token" not in dumped
 
 
+def test_retrieve_rag_success_strips_authorization_bearer_leaks(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="Authorization: Bearer abc123",
+            citations=[],
+            metadata={
+                "duration_ms": 12,
+                "authorization": "Bearer abc123",
+                "bearer": "abc123",
+                "nested": {"Authorization": "Bearer abc123"},
+                "notes": ["Authorization: Bearer abc123"],
+            },
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is True
+    assert result["context"] == ""
+    assert result["metadata"] == {
+        "duration_ms": 12,
+        "nested": {},
+        "notes": [""],
+        "selected_count": 0,
+        "citation_count": 0,
+    }
+    assert "Authorization" not in dumped
+    assert "authorization" not in dumped
+    assert "Bearer" not in dumped
+    assert "bearer" not in dumped
+    assert "abc123" not in dumped
+
+
 def test_retrieve_rag_not_configured_is_safe(tmp_path):
     with rag_request_context(make_context(tmp_path), provider=None):
         result = json.loads(retrieve_rag_handler({"query": "需要资料"}))

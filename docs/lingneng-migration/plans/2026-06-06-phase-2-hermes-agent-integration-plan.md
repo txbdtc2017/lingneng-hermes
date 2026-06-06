@@ -46,8 +46,10 @@ No additional user confirmation is required before Phase 2 execution. The Phase
 - Phase 2 is a no-tool Hermes conversation phase.
 - `LINGNENG_AGENT_MODE=fake` remains the default.
 - `LINGNENG_AGENT_MODE=hermes` selects `HermesAgentRunAdapter`.
-- `AIAgent` receives `enabled_toolsets=[]`; the dedicated LingNeng business
-  toolset remains Phase 3 work.
+- `AIAgent` receives `enabled_toolsets=[]` and
+  `disabled_toolsets=["kanban"]`; the dedicated LingNeng business toolset
+  remains Phase 3 work. The kanban disable guard strips worker tools that
+  Hermes can inject when `HERMES_KANBAN_TASK` is present.
 - LingNeng SessionDB data defaults under `LINGNENG_RUNTIME_DIR`.
 - Real model credentials are not required for tests.
 - Docker, Compose, deployment scripts, GitHub Actions workflows, RAG, skills,
@@ -710,7 +712,7 @@ key or run store tests.
 - [ ] **Step 1: Reload durable context**
 
 Run the reload commands from Task 2.1 Step 1. Confirm `enabled_toolsets=[]`
-is the accepted Phase 2 no-tool boundary.
+plus `disabled_toolsets=["kanban"]` is the accepted Phase 2 no-tool boundary.
 
 - [ ] **Step 2: Extend failing adapter construction tests**
 
@@ -767,6 +769,7 @@ async def test_hermes_adapter_constructs_agent_with_no_tool_lingneng_context(tmp
     assert kwargs["platform"] == "lingneng"
     assert kwargs["session_id"] == resolved.session_key
     assert kwargs["enabled_toolsets"] == []
+    assert kwargs["disabled_toolsets"] == ["kanban"]
     assert kwargs["quiet_mode"] is True
     assert kwargs["skip_context_files"] is True
     assert kwargs["skip_memory"] is True
@@ -795,10 +798,37 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
     assert agent.run_args["system_message"] == request.system_prompt.content
     assert agent.run_args["persist_user_message"] == request.query.content
     assert agent.run_args["conversation_history"] == []
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_excludes_env_injected_kanban_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    CapturingAgent.calls = []
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=CapturingAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    from model_tools import get_tool_definitions
+
+    kwargs = CapturingAgent.calls[0]
+    definitions = get_tool_definitions(
+        enabled_toolsets=kwargs["enabled_toolsets"],
+        disabled_toolsets=kwargs.get("disabled_toolsets"),
+        quiet_mode=True,
+    )
+    tool_names = [tool["function"]["name"] for tool in definitions]
+
+    assert all(not name.startswith("kanban_") for name in tool_names)
 ```
 
 Expected initial failure: adapter does not accept `settings` or `agent_cls`,
-does not construct `AIAgent`, and has no test inspection hook.
+does not construct `AIAgent`, has no test inspection hook, or does not strip
+env-injected kanban tools from the no-tool boundary.
 
 - [ ] **Step 3: Run focused test and confirm failure**
 
@@ -875,6 +905,7 @@ class HermesAgentRunAdapter:
             session_id=resolved_session.session_key,
             session_db=self.session_store.db,
             enabled_toolsets=[],
+            disabled_toolsets=["kanban"],
             quiet_mode=True,
             skip_context_files=True,
             skip_memory=True,
@@ -1156,6 +1187,7 @@ def _build_agent(self, resolved_session, stream_delta_callback=None):
         session_id=resolved_session.session_key,
         session_db=self.session_store.db,
         enabled_toolsets=[],
+        disabled_toolsets=["kanban"],
         quiet_mode=True,
         skip_context_files=True,
         skip_memory=True,

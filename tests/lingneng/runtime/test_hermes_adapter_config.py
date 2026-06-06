@@ -120,6 +120,7 @@ async def test_hermes_adapter_constructs_agent_with_no_tool_lingneng_context(
     assert kwargs["platform"] == "lingneng"
     assert kwargs["session_id"] == resolved.session_key
     assert kwargs["enabled_toolsets"] == []
+    assert kwargs["disabled_toolsets"] == ["kanban"]
     assert kwargs["quiet_mode"] is True
     assert kwargs["skip_context_files"] is True
     assert kwargs["skip_memory"] is True
@@ -150,3 +151,32 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
     assert agent.run_args["system_message"] == request.system_prompt.content
     assert agent.run_args["persist_user_message"] == request.query.content
     assert agent.run_args["conversation_history"] == []
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_excludes_env_injected_kanban_tools(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    CapturingAgent.calls = []
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=CapturingAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    from model_tools import get_tool_definitions
+
+    kwargs = CapturingAgent.calls[0]
+    definitions = get_tool_definitions(
+        enabled_toolsets=kwargs["enabled_toolsets"],
+        disabled_toolsets=kwargs.get("disabled_toolsets"),
+        quiet_mode=True,
+    )
+    tool_names = [tool["function"]["name"] for tool in definitions]
+
+    assert all(not name.startswith("kanban_") for name in tool_names)

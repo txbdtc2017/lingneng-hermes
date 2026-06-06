@@ -59,6 +59,7 @@ class HermesAgentRunAdapter:
             session_id=resolved_session.session_key,
             session_db=self.session_store.db,
             enabled_toolsets=[],
+            disabled_toolsets=["kanban"],
             quiet_mode=True,
             skip_context_files=True,
             skip_memory=True,

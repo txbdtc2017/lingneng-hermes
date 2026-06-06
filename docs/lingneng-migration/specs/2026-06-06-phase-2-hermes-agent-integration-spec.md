@@ -107,8 +107,10 @@ contract reference. Do not implement there.
   `enabled_toolsets=[]`. This is the explicit no-tool mode and avoids
   accidentally exposing Hermes defaults before Phase 3 registers the dedicated
   LingNeng toolset.
-- Phase 2 does not rely on `disabled_toolsets` for the no-tool safety boundary;
-  the boundary is the explicit empty enabled toolset.
+- Phase 2 also defensively passes `disabled_toolsets=["kanban"]`. Hermes can
+  inject kanban worker tools when `HERMES_KANBAN_TASK` is present, even with
+  `enabled_toolsets=[]`, and the disabled-toolset subtraction is the guard that
+  strips those env-injected tools from LingNeng no-tool runs.
 - The adapter must pass `platform="lingneng"`, `session_id` equal to the
   resolved session key, `session_db` set to the LingNeng SessionDB, and
   `quiet_mode=True`.
@@ -417,7 +419,7 @@ Phase 2 is complete when:
   `session_id`.
 - `HermesAgentRunAdapter` passes a LingNeng-owned `SessionDB` into `AIAgent`.
 - `HermesAgentRunAdapter` uses explicit no-tool configuration and does not
-  expose Hermes default tools.
+  expose Hermes default tools or env-injected kanban worker tools.
 - Automated tests prove Java `history` is not passed as `conversation_history`
   and is not appended to SessionDB.
 - Automated tests prove two turns with the same resolved LingNeng session reuse

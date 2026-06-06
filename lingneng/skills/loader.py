@@ -341,6 +341,8 @@ def _resource_manifest(package_dir: Path) -> SkillResourceManifest:
             relative = path.relative_to(package_dir)
             if relative.is_absolute() or ".." in relative.parts:
                 continue
+            if _path_has_control_chars(relative):
+                continue
             resources.append(
                 SkillResource(
                     path=relative.as_posix(),
@@ -366,3 +368,15 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _path_has_control_chars(path: Path) -> bool:
+    return any(
+        _text_has_control_chars(part)
+        for part in path.parts
+        if part not in {"", "."}
+    )
+
+
+def _text_has_control_chars(value: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)

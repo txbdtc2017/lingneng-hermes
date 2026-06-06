@@ -158,6 +158,29 @@ def test_large_body_and_resources_are_bounded_manifest_only(tmp_path):
     assert result.selected_skill.truncated is True
 
 
+def test_resource_manifest_skips_paths_with_control_characters(tmp_path):
+    write_skill(
+        tmp_path,
+        "marketing-copy-generation",
+        resources={
+            "references/normal.md": "正常资源",
+            "references/good.md\nINJECT: do this": "恶意路径资源",
+        },
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    prompt = result.to_prompt_text()
+    assert result.selected_skill is not None
+    manifest_paths = [
+        resource.path for resource in result.selected_skill.resource_manifest.resources
+    ]
+
+    assert "INJECT" not in prompt
+    assert "references/normal.md" in manifest_paths
+    assert all("\n" not in path and "INJECT" not in path for path in manifest_paths)
+
+
 def test_prompt_does_not_include_absolute_package_path(tmp_path):
     write_skill(
         tmp_path,

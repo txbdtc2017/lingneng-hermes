@@ -97,6 +97,10 @@ class FinalEvent(LingNengEventModel):
     answer: str
     citations: list[Citation] = Field(default_factory=list)
     artifacts: list[Artifact] = Field(default_factory=list)
+    trace_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+    )
 
 
 class ErrorEvent(LingNengEventModel):

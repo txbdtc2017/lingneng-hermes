@@ -21,7 +21,12 @@ from lingneng.schemas.chat_events import (
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import ResolvedSessionKey, resolve_session_key
-from lingneng.session.run_store import LingNengRunStore, RunStatus, RunStoreStateError
+from lingneng.session.run_store import (
+    LingNengRunStore,
+    RunRecord,
+    RunStatus,
+    RunStoreStateError,
+)
 
 
 def register_routes(
@@ -51,10 +56,9 @@ def register_routes(
         reservation = run_store.reserve_run(resolved.session_key, request.request_id)
 
         if not reservation.created:
-            stream = _duplicate_stream(
-                reservation.record.run_id,
+            stream = _replay_or_duplicate_stream(
+                reservation.record,
                 request.request_id,
-                reservation.record.status,
             )
         else:
             stream = _adapter_stream(
@@ -71,19 +75,61 @@ def register_routes(
         )
 
 
-async def _duplicate_stream(
-    run_id: str,
+async def _replay_or_duplicate_stream(
+    record: RunRecord,
     request_id: str,
-    status: RunStatus,
 ) -> AsyncIterator[str]:
-    if status is RunStatus.RUNNING:
-        code = "REQUEST_ALREADY_RUNNING"
-        message = "Request is already running"
-    else:
-        code = "REQUEST_ALREADY_COMPLETED"
-        message = "Request is already completed"
+    if record.status is RunStatus.RUNNING:
+        yield _duplicate_error_frame(
+            record.run_id,
+            request_id,
+            "REQUEST_ALREADY_RUNNING",
+            "Request is already running",
+        )
+        return
+
+    if record.status is RunStatus.SUCCEEDED:
+        answer = record.answer or ""
+        yield encode_sse(
+            "run_started",
+            RunStartedEvent(run_id=record.run_id, request_id=request_id),
+        )
+        if answer:
+            yield encode_sse(
+                "answer_delta",
+                AnswerDeltaEvent(text=answer, sequence=1),
+            )
+        yield encode_sse(
+            "final",
+            FinalEvent(
+                run_id=record.run_id,
+                status="succeeded",
+                answer=answer,
+                artifacts=record.artifacts,
+            ),
+        )
+        return
 
     yield encode_sse(
+        "error",
+        ErrorEvent(
+            run_id=record.run_id,
+            request_id=request_id,
+            code=record.error_code or "RUNTIME_ERROR",
+            message=record.error_message or "Agent runtime failed",
+            trace_id=_new_trace_id(),
+            recoverable=False,
+        ),
+    )
+
+
+def _duplicate_error_frame(
+    run_id: str,
+    request_id: str,
+    code: str,
+    message: str,
+) -> str:
+    return encode_sse(
         "error",
         ErrorEvent(
             run_id=run_id,

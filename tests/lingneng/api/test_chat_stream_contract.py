@@ -367,7 +367,9 @@ def test_adapter_normal_end_without_terminal_marks_failed_and_closes_with_error(
     assert record.error_code == "RUNTIME_ERROR"
     assert second.status_code == 200
     assert second_frames[0][0] == "error"
-    assert second_frames[0][1]["code"] == "REQUEST_ALREADY_COMPLETED"
+    assert second_frames[0][1]["code"] == "RUNTIME_ERROR"
+    assert second_frames[0][1]["message"] == "Agent runtime failed"
+    assert second_frames[0][1]["recoverable"] is False
     assert adapter.calls == 1
 
 
@@ -447,7 +449,7 @@ def test_repeated_running_request_does_not_invoke_adapter(tmp_path):
     assert adapter.calls == 0
 
 
-def test_repeated_completed_request_does_not_invoke_adapter_second_time(tmp_path):
+def test_repeated_completed_request_replays_final_without_second_adapter_call(tmp_path):
     adapter = CountingFinalAdapter()
     store = LingNengRunStore(tmp_path / "runs.sqlite3")
     app = create_app(settings=settings(tmp_path), adapter=adapter, run_store=store)
@@ -460,15 +462,12 @@ def test_repeated_completed_request_does_not_invoke_adapter_second_time(tmp_path
     assert first.status_code == 200
     assert "event: final" in first.text
     assert second.status_code == 200
-    assert frames == [
-        (
-            "error",
-            {
-                **frames[0][1],
-                "code": "REQUEST_ALREADY_COMPLETED",
-                "message": "Request is already completed",
-                "recoverable": True,
-            },
-        )
+    assert [event_name for event_name, _data in frames] == [
+        "run_started",
+        "answer_delta",
+        "final",
     ]
+    assert frames[1][1]["text"] == "完成"
+    assert frames[2][1]["status"] == "succeeded"
+    assert frames[2][1]["answer"] == "完成"
     assert adapter.calls == 1

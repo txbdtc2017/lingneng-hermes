@@ -5,13 +5,16 @@ import threading
 
 import pytest
 
+import lingneng.runtime.hermes_adapter as hermes_adapter_module
 from lingneng.api.app import create_app
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.fake_agent import FakeAgentRunAdapter
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
+from lingneng.schemas.chat_events import FinalEvent
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from lingneng.session.run_store import LingNengRunStore
+from tests.lingneng.skills.test_skill_loader import write_skill
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
 
@@ -119,6 +122,25 @@ class CapturingAgent:
             "task_id": task_id,
             "persist_user_message": persist_user_message,
         }
+        return {"final_response": "完成", "messages": []}
+
+
+class RecordingSystemPromptAgent:
+    system_message_seen = ""
+
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        type(self).system_message_seen = system_message or ""
         return {"final_response": "完成", "messages": []}
 
 
@@ -245,6 +267,110 @@ async def test_hermes_adapter_constructs_agent_with_lingneng_tool_context(
     assert events[-1].answer == "完成"
 
 
+@pytest.mark.asyncio
+async def test_hermes_adapter_injects_bounded_skill_prompt(tmp_path):
+    skill_root = tmp_path / "skills"
+    write_skill(
+        skill_root,
+        "employee-marketing-content-creator",
+        kind="employee_base",
+        employee_type="marketing_content_creator",
+        display_name="内容创意师",
+        body="## Role Identity\n你是内容创意师。",
+    )
+    write_skill(
+        skill_root,
+        "marketing-copy-generation",
+        body="## When to Use\n写营销内容。",
+    )
+    payload = full_payload()
+    payload["skill"]["skill_id"] = "marketing-copy-generation"
+    payload["skill"]["inline"] = {"summary": "INLINE MUST NOT APPEAR"}
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path / "runtime",
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_SKILL_ROOTS=str(skill_root),
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    prompt = RecordingSystemPromptAgent.system_message_seen
+    java_index = prompt.index("你是灵能营销内容员工。")
+    skill_index = prompt.index("## LingNeng Skill Context")
+    rag_index = prompt.index("## LingNeng RAG Guidance")
+    assert java_index < skill_index < rag_index
+    assert "employee-marketing-content-creator" in prompt
+    assert "marketing-copy-generation" in prompt
+    assert "写营销内容" in prompt
+    assert "INLINE MUST NOT APPEAR" not in prompt
+    assert "上一轮用户问题" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_continues_when_skill_roots_missing(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path / "runtime",
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_SKILL_ROOTS=str(tmp_path / "missing"),
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    prompt = RecordingSystemPromptAgent.system_message_seen
+    assert "你是灵能营销内容员工。" in prompt
+    assert "## LingNeng Skill Context" in prompt
+    assert "SKILL_ROOT_MISSING" in prompt
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_continues_when_skill_loader_errors(
+    tmp_path,
+    monkeypatch,
+):
+    class ExplodingSkillLoader:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def build_prompt_context(self, request):
+            raise RuntimeError("private loader detail")
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "LingNengSkillLoader",
+        ExplodingSkillLoader,
+        raising=False,
+    )
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    prompt = RecordingSystemPromptAgent.system_message_seen
+    assert "你是灵能营销内容员工。" in prompt
+    assert "SKILL_CONTEXT_UNAVAILABLE" in prompt
+    assert "private loader detail" not in prompt
+
+
 def test_hermes_adapter_import_does_not_register_lingneng_tools_in_fake_mode():
     result = subprocess.run(
         [
@@ -285,7 +411,9 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
 
     agent = adapter._last_agent_for_tests
     assert agent.run_args["user_message"] == request.query.content
-    assert agent.run_args["system_message"] == request.system_prompt.content
+    assert agent.run_args["system_message"].startswith(request.system_prompt.content)
+    assert "## LingNeng RAG Guidance" in agent.run_args["system_message"]
+    assert "Java 历史" not in agent.run_args["system_message"]
     assert agent.run_args["persist_user_message"] == request.query.content
     assert agent.run_args["conversation_history"] == []
 

@@ -26,6 +26,7 @@ from lingneng.schemas.chat_events import AgentStepEvent, AnswerDeltaEvent, Error
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.hermes_session import LingNengHermesSessionStore
 from lingneng.session.keys import ResolvedSessionKey
+from lingneng.skills.loader import LingNengSkillLoader
 
 
 _KANBAN_ENV_KEYS = (
@@ -36,6 +37,11 @@ _KANBAN_ENV_KEYS = (
     "HERMES_KANBAN_WORKSPACES_ROOT",
 )
 _KANBAN_ENV_LOCK = threading.RLock()
+_MINIMAL_RAG_GUIDANCE = (
+    "## LingNeng RAG Guidance\n"
+    "Use retrieve_rag for internal learned business knowledge that needs factual "
+    "support. Do not use it for realtime public facts."
+)
 
 
 @dataclass(frozen=True)
@@ -160,7 +166,7 @@ class HermesAgentRunAdapter:
                     self._last_agent_for_tests = agent
                     result = agent.run_conversation(
                         request.query.content,
-                        system_message=request.system_prompt.content,
+                        system_message=self._build_system_message(request),
                         conversation_history=history,
                         task_id=run_id,
                         persist_user_message=request.query.content,
@@ -215,6 +221,13 @@ class HermesAgentRunAdapter:
         _install_lingneng_activity_tracker(agent)
         return agent
 
+    def _build_system_message(self, request: ChatStreamRequest) -> str:
+        skill_prompt = _skill_prompt_text(self.settings, request)
+        return _compose_system_message(
+            request.system_prompt.content,
+            skill_prompt,
+        )
+
 
 def _final_response_from_result(result: Any) -> str:
     if isinstance(result, dict):
@@ -232,3 +245,27 @@ def _public_runtime_error(run_id: str, request_id: str) -> ErrorEvent:
         trace_id=f"trace_{uuid.uuid4().hex}",
         recoverable=False,
     )
+
+
+def _skill_prompt_text(
+    settings: LingNengSettings,
+    request: ChatStreamRequest,
+) -> str:
+    try:
+        return LingNengSkillLoader(settings).build_prompt_context(
+            request
+        ).to_prompt_text()
+    except Exception:
+        return (
+            "## LingNeng Skill Context\n\n"
+            "### Skill Warnings\n"
+            "- SKILL_CONTEXT_UNAVAILABLE: Skill prompt context could not be loaded."
+        )
+
+
+def _compose_system_message(base_prompt: str, skill_prompt: str) -> str:
+    parts = [base_prompt.strip()]
+    if skill_prompt.strip():
+        parts.append(skill_prompt.strip())
+    parts.append(_MINIMAL_RAG_GUIDANCE)
+    return "\n\n".join(part for part in parts if part)

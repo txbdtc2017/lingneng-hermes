@@ -81,6 +81,15 @@ _FORBIDDEN_TEXT_PARTS = (
     "traceback",
     "exception",
 )
+_PUBLIC_FAILURE_CODES = frozenset(
+    {
+        "RAG_CONTEXT_MISSING",
+        "INVALID_RAG_QUERY",
+        "NOT_CONFIGURED",
+        "RAG_PROVIDER_ERROR",
+        "RAG_PROVIDER_INVALID_RESULT",
+    }
+)
 
 
 class HttpRagProvider:
@@ -169,6 +178,8 @@ def retrieve_rag_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> s
         result = provider.retrieve(request)
     except Exception:
         return _json_result(_failed_result("RAG_PROVIDER_ERROR"))
+    if not isinstance(result, RagRetrieveResult):
+        return _json_result(_failed_result("RAG_PROVIDER_INVALID_RESULT"))
 
     return _json_result(_normalize_provider_result(result, context.settings))
 
@@ -204,7 +215,7 @@ def _normalize_provider_result(
     metadata["citation_count"] = len(citations)
 
     if result.status == "failed":
-        code = result.code or "RAG_PROVIDER_ERROR"
+        code = _public_failure_code(result.code, default="RAG_PROVIDER_ERROR")
         return _failed_result(code, context=context, metadata=metadata)
 
     return {
@@ -243,6 +254,12 @@ def _public_error_message(code: str) -> str:
         "RAG_PROVIDER_ERROR": "LingNeng RAG provider failed.",
     }
     return messages.get(code, "LingNeng RAG retrieval failed.")
+
+
+def _public_failure_code(value: str | None, *, default: str) -> str:
+    if value in _PUBLIC_FAILURE_CODES:
+        return value
+    return default
 
 
 def _sanitize_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:

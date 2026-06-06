@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
@@ -17,7 +19,7 @@ from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
 
 class FakeRagProvider:
-    def __init__(self, result: RagRetrieveResult | Exception) -> None:
+    def __init__(self, result: Any | Exception) -> None:
         self.result = result
         self.requests: list[RagRetrieveRequest] = []
 
@@ -191,6 +193,55 @@ def test_retrieve_rag_provider_exception_is_sanitized(tmp_path):
     assert "private provider" not in dumped
     assert "api_key" not in dumped
     assert "secret" not in dumped
+    assert "traceback" not in dumped
+    assert "需要资料" not in dumped
+
+
+@pytest.mark.parametrize(
+    "provider_result",
+    [
+        None,
+        {"status": "hit", "context": "api_key=secret", "metadata": {"token": "x"}},
+    ],
+)
+def test_retrieve_rag_invalid_provider_result_is_safe(tmp_path, provider_result):
+    provider = FakeRagProvider(provider_result)
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is False
+    assert result["code"] == "RAG_PROVIDER_INVALID_RESULT"
+    assert result["status"] == "failed"
+    assert "api_key" not in dumped
+    assert "secret" not in dumped
+    assert "token" not in dumped
+    assert "traceback" not in dumped
+    assert "需要资料" not in dumped
+
+
+def test_retrieve_rag_failed_provider_code_is_sanitized(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="failed",
+            context="api_key=secret",
+            citations=[],
+            metadata={"token": "secret-token"},
+            code="RAG_PROVIDER_ERROR api_key=secret",
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is False
+    assert result["code"] == "RAG_PROVIDER_ERROR"
+    assert result["status"] == "failed"
+    assert "api_key" not in dumped
+    assert "secret" not in dumped
+    assert "token" not in dumped
     assert "traceback" not in dumped
     assert "需要资料" not in dumped
 

@@ -47,7 +47,7 @@ def register_routes(
         verify_internal_key(settings, x_internal_key)
 
         request = await _parse_chat_request(raw_request)
-        resolved = resolve_session_key(request)
+        resolved = _resolve_chat_session_key(request)
         reservation = run_store.reserve_run(resolved.session_key, request.request_id)
 
         if not reservation.created:
@@ -156,6 +156,13 @@ async def _parse_chat_request(raw_request: Request) -> ChatStreamRequest:
     try:
         return ChatStreamRequest.model_validate(payload)
     except ValidationError:
+        _raise_invalid_chat_request()
+
+
+def _resolve_chat_session_key(request: ChatStreamRequest) -> ResolvedSessionKey:
+    try:
+        return resolve_session_key(request)
+    except ValueError:
         _raise_invalid_chat_request()
 
 

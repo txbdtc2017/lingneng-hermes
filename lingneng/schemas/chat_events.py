@@ -22,6 +22,8 @@ FORMAL_EVENT_NAMES = [
 
 FINAL_STATUSES = {"succeeded", "degraded", "failed", "blocked"}
 FinalStatus = Literal["succeeded", "degraded", "failed", "blocked"]
+AgentStepPhase = Literal["tool"]
+AgentStepStatus = Literal["started", "succeeded", "skipped", "failed"]
 
 
 class LingNengEventModel(BaseModel):
@@ -36,6 +38,17 @@ class RunStartedEvent(LingNengEventModel):
 class AnswerDeltaEvent(LingNengEventModel):
     text: str
     sequence: int
+
+
+class AgentStepEvent(LingNengEventModel):
+    sequence: int
+    step_id: str
+    phase: AgentStepPhase
+    status: AgentStepStatus
+    title: str
+    short_text: str
+    summary: str | None = None
+    refs: list[dict] = Field(default_factory=list)
 
 
 class FinalEvent(LingNengEventModel):

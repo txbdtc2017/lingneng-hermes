@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 import json
 import time
 from typing import Any
@@ -14,6 +15,9 @@ from lingneng.tools.attachments import (
     build_attachment_prompt_context,
 )
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
+
+
+_ATTACHMENT_CONTEXTVAR = ContextVar("attachment_test_contextvar", default="unset")
 
 
 class FakeAttachmentProvider:
@@ -38,6 +42,21 @@ class SleepingAttachmentProvider:
         time.sleep(self.sleep_seconds)
         return AttachmentProcessingResult(
             context_text="secret-token /Users/rotas/private",
+            selected_count=1,
+            processed_count=1,
+        )
+
+
+class ContextReadingProvider:
+    def __init__(self) -> None:
+        self.context_value = None
+        self.requests = []
+
+    def process(self, request):
+        self.requests.append(request)
+        self.context_value = _ATTACHMENT_CONTEXTVAR.get()
+        return AttachmentProcessingResult(
+            context_text=f"context={self.context_value}",
             selected_count=1,
             processed_count=1,
         )
@@ -138,6 +157,56 @@ def test_attachment_rejects_unallowed_host(tmp_path):
     assert provider.requests == []
 
 
+def test_attachment_rejects_when_allowed_hosts_not_configured(tmp_path):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(context_text="must not run", processed_count=1)
+    )
+
+    with attachment_processing_context(provider=provider):
+        result = build_attachment_prompt_context(
+            settings(tmp_path, LINGNENG_ATTACHMENT_ALLOWED_HOSTS=""),
+            request_with_attachments(attachment()),
+        )
+
+    assert result.prompt_text == ""
+    assert result.status == "skipped"
+    assert "ATTACHMENT_ALLOWED_HOSTS_NOT_CONFIGURED" in warning_codes(result)
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize(
+    "url,allowed_hosts",
+    [
+        ("http://169.254.169.254/latest/meta-data", "169.254.169.254"),
+        ("http://127.0.0.1/file.pdf", "127.0.0.1"),
+        ("http://localhost/file.pdf", "localhost"),
+        ("http://10.1.2.3/file.pdf", "10.1.2.3"),
+        ("http://172.16.0.1/file.pdf", "172.16.0.1"),
+        ("http://192.168.1.1/file.pdf", "192.168.1.1"),
+        ("http://[::1]/file.pdf", "::1"),
+    ],
+)
+def test_attachment_rejects_private_or_local_hosts_even_when_allowlisted(
+    tmp_path,
+    url,
+    allowed_hosts,
+):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(context_text="must not run", processed_count=1)
+    )
+
+    with attachment_processing_context(provider=provider):
+        result = build_attachment_prompt_context(
+            settings(tmp_path, LINGNENG_ATTACHMENT_ALLOWED_HOSTS=allowed_hosts),
+            request_with_attachments(attachment(download_url=url)),
+        )
+
+    assert result.prompt_text == ""
+    assert result.status == "skipped"
+    assert "ATTACHMENT_HOST_NOT_ALLOWED" in warning_codes(result)
+    assert provider.requests == []
+
+
 def test_attachment_file_count_limit_skips_provider(tmp_path):
     provider = FakeAttachmentProvider(
         AttachmentProcessingResult(context_text="must not run", processed_count=2)
@@ -155,6 +224,34 @@ def test_attachment_file_count_limit_skips_provider(tmp_path):
     assert result.prompt_text == ""
     assert result.status == "skipped"
     assert "ATTACHMENT_MAX_FILES_EXCEEDED" in warning_codes(result)
+    assert provider.requests == []
+
+
+@pytest.mark.parametrize(
+    "size,expected_code",
+    [
+        (None, "ATTACHMENT_SIZE_UNKNOWN"),
+        (-1, "ATTACHMENT_SIZE_INVALID"),
+    ],
+)
+def test_attachment_unknown_or_negative_size_skips_provider(
+    tmp_path,
+    size,
+    expected_code,
+):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(context_text="must not run", processed_count=1)
+    )
+
+    with attachment_processing_context(provider=provider):
+        result = build_attachment_prompt_context(
+            settings(tmp_path),
+            request_with_attachments(attachment(size=size)),
+        )
+
+    assert result.prompt_text == ""
+    assert result.status == "skipped"
+    assert expected_code in warning_codes(result)
     assert provider.requests == []
 
 
@@ -283,6 +380,45 @@ def test_attachment_provider_call_is_wall_clock_timeout_bounded(tmp_path):
     assert "secret-token" not in dumped
     assert "/Users/rotas" not in dumped
     assert "traceback" not in dumped.lower()
+
+
+def test_attachment_provider_request_includes_resource_ceilings(tmp_path):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        build_attachment_prompt_context(settings(tmp_path), request_with_attachments(attachment()))
+
+    provider_request = provider.requests[0]
+    assert provider_request.max_files == 2
+    assert provider_request.max_total_bytes == 1000
+    assert provider_request.max_file_bytes == 800
+    assert provider_request.max_image_bytes == 500
+    assert provider_request.timeout_seconds == 0.1
+    assert provider_request.context_max_chars == 500
+
+
+def test_attachment_provider_timeout_preserves_contextvars(tmp_path):
+    provider = ContextReadingProvider()
+    token = _ATTACHMENT_CONTEXTVAR.set("current-request-value")
+
+    try:
+        with attachment_processing_context(provider=provider):
+            result = build_attachment_prompt_context(
+                settings(tmp_path),
+                request_with_attachments(attachment()),
+            )
+    finally:
+        _ATTACHMENT_CONTEXTVAR.reset(token)
+
+    assert result.status == "succeeded"
+    assert provider.context_value == "current-request-value"
+    assert "context=current-request-value" in result.prompt_text
 
 
 def test_attachment_context_truncates_to_configured_max_chars(tmp_path):

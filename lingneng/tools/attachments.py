@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextvars import copy_context
+from ipaddress import ip_address
 import re
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -64,6 +66,7 @@ _FORBIDDEN_TEXT_PARTS = (
 _PUBLIC_WARNING_CODES = frozenset(
     {
         "ATTACHMENT_CONTEXT_TRUNCATED",
+        "ATTACHMENT_ALLOWED_HOSTS_NOT_CONFIGURED",
         "ATTACHMENT_FILE_TOO_LARGE",
         "ATTACHMENT_HOST_NOT_ALLOWED",
         "ATTACHMENT_IMAGE_TOO_LARGE",
@@ -72,12 +75,17 @@ _PUBLIC_WARNING_CODES = frozenset(
         "ATTACHMENT_PROVIDER_INVALID_RESULT",
         "ATTACHMENT_PROVIDER_NOT_CONFIGURED",
         "ATTACHMENT_PROVIDER_TIMEOUT",
+        "ATTACHMENT_SIZE_INVALID",
+        "ATTACHMENT_SIZE_UNKNOWN",
         "ATTACHMENT_TOTAL_BYTES_EXCEEDED",
         "ATTACHMENT_URL_INVALID",
     }
 )
 _PUBLIC_WARNING_MESSAGES = {
     "ATTACHMENT_CONTEXT_TRUNCATED": "Attachment context was truncated.",
+    "ATTACHMENT_ALLOWED_HOSTS_NOT_CONFIGURED": (
+        "Attachment download hosts are not configured."
+    ),
     "ATTACHMENT_FILE_TOO_LARGE": "Attachment exceeds the per-file byte limit.",
     "ATTACHMENT_HOST_NOT_ALLOWED": "Attachment download host is not allowed.",
     "ATTACHMENT_IMAGE_TOO_LARGE": "Image attachment exceeds the image byte limit.",
@@ -90,6 +98,8 @@ _PUBLIC_WARNING_MESSAGES = {
         "Attachment processing provider is not configured."
     ),
     "ATTACHMENT_PROVIDER_TIMEOUT": "Attachment processing provider timed out.",
+    "ATTACHMENT_SIZE_INVALID": "Attachment size is invalid.",
+    "ATTACHMENT_SIZE_UNKNOWN": "Attachment size is missing.",
     "ATTACHMENT_TOTAL_BYTES_EXCEEDED": (
         "Attachment total size exceeds the request limit."
     ),
@@ -117,6 +127,10 @@ class AttachmentProcessingRequest(BaseModel):
     attachments: list[AttachmentPayload] = Field(default_factory=list)
     timeout_seconds: float
     context_max_chars: int
+    max_files: int
+    max_total_bytes: int
+    max_file_bytes: int
+    max_image_bytes: int
 
 
 class AttachmentProcessingResult(BaseModel):
@@ -184,7 +198,7 @@ def build_attachment_prompt_context(
     if not selected:
         return _skipped_context(warnings)
 
-    total_bytes = sum(_attachment_size(item) for item in selected)
+    total_bytes = sum(int(item.size) for item in selected if item.size is not None)
     if total_bytes > settings.attachment_max_total_bytes:
         return _skipped_context(
             [
@@ -216,6 +230,10 @@ def build_attachment_prompt_context(
         attachments=selected,
         timeout_seconds=settings.attachment_timeout_seconds,
         context_max_chars=settings.attachment_context_max_chars,
+        max_files=settings.attachment_max_files,
+        max_total_bytes=settings.attachment_max_total_bytes,
+        max_file_bytes=settings.attachment_max_file_bytes,
+        max_image_bytes=settings.attachment_max_image_bytes,
     )
     try:
         provider_result = _coerce_provider_result(
@@ -315,6 +333,12 @@ def _select_attachments(
     selected: list[AttachmentPayload] = []
     warnings: list[AttachmentWarning] = []
     allowed_hosts = _normalized_allowed_hosts(settings.attachment_allowed_hosts)
+    if not allowed_hosts:
+        return [], [
+            _warning("ATTACHMENT_ALLOWED_HOSTS_NOT_CONFIGURED", attachment=attachment)
+            for attachment in attachments
+        ]
+
     for attachment in attachments:
         clean_url = sanitize_strict_public_url(attachment.download_url)
         if not clean_url:
@@ -324,13 +348,20 @@ def _select_attachments(
         if not host:
             warnings.append(_warning("ATTACHMENT_URL_INVALID", attachment=attachment))
             continue
+        if _is_disallowed_download_host(host):
+            warnings.append(
+                _warning("ATTACHMENT_HOST_NOT_ALLOWED", attachment=attachment)
+            )
+            continue
         if allowed_hosts and host not in allowed_hosts:
             warnings.append(
                 _warning("ATTACHMENT_HOST_NOT_ALLOWED", attachment=attachment)
             )
             continue
 
-        size = _attachment_size(attachment)
+        size = _attachment_size(attachment, warnings)
+        if size is None:
+            continue
         if size > settings.attachment_max_file_bytes:
             warnings.append(_warning("ATTACHMENT_FILE_TOO_LARGE", attachment=attachment))
             continue
@@ -348,11 +379,16 @@ def _process_with_timeout(
     *,
     timeout_seconds: float,
 ) -> AttachmentProcessingResult | dict[str, Any]:
+    # The caller degrades after this wall-clock timeout. Python cannot forcibly
+    # stop provider code that is already running in a thread, so providers must
+    # also honor request.timeout_seconds and byte ceilings for network/file I/O.
+    # future.cancel() below is best-effort for work that has not started.
+    context = copy_context()
     executor = ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="lingneng-attachment-processing",
     )
-    future = executor.submit(provider.process, request)
+    future = executor.submit(context.run, provider.process, request)
     try:
         return future.result(timeout=max(0.1, timeout_seconds))
     except FutureTimeoutError:
@@ -488,21 +524,46 @@ def _normalized_allowed_hosts(hosts: list[str]) -> set[str]:
             if parsed_host:
                 normalized.add(parsed_host)
             continue
-        normalized.add(value.split("/", 1)[0].split(":", 1)[0])
+        value = value.split("/", 1)[0]
+        if value.startswith("[") and "]" in value:
+            value = value[1 : value.index("]")]
+        elif value.count(":") == 1:
+            value = value.split(":", 1)[0]
+        normalized.add(value.rstrip("."))
     return normalized
 
 
 def _url_host(value: str) -> str | None:
     try:
-        return urlsplit(value).hostname.lower()  # type: ignore[union-attr]
+        host = urlsplit(value).hostname
     except (AttributeError, ValueError):
         return None
+    return host.lower().rstrip(".") if host else None
 
 
-def _attachment_size(attachment: AttachmentPayload) -> int:
+def _is_disallowed_download_host(host: str) -> bool:
+    normalized = host.strip().lower().rstrip(".")
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        parsed_ip = ip_address(normalized)
+    except ValueError:
+        return False
+    return not parsed_ip.is_global
+
+
+def _attachment_size(
+    attachment: AttachmentPayload,
+    warnings: list[AttachmentWarning],
+) -> int | None:
     if attachment.size is None:
-        return 0
-    return max(0, int(attachment.size))
+        warnings.append(_warning("ATTACHMENT_SIZE_UNKNOWN", attachment=attachment))
+        return None
+    size = int(attachment.size)
+    if size < 0:
+        warnings.append(_warning("ATTACHMENT_SIZE_INVALID", attachment=attachment))
+        return None
+    return size
 
 
 def _is_image_attachment(attachment: AttachmentPayload) -> bool:

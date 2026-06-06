@@ -18,7 +18,7 @@ def _public_tool_name(tool_name: str) -> str:
     safe = "".join(
         ch for ch in tool_name if ch.isascii() and (ch.isalnum() or ch in {"_", "-", "."})
     )
-    return safe or "tool"
+    return (safe or "tool")[:64]
 
 
 def run_started(run_id: str, request_id: str) -> RunStartedEvent:
@@ -42,7 +42,7 @@ def agent_step_started(
         status="started",
         title=safe_name,
         short_text=f"Starting {safe_name}.",
-        summary=preview,
+        summary="Tool input received." if preview else None,
         refs=[],
     )
 
@@ -93,7 +93,7 @@ def agent_step_skipped(
         status="skipped",
         title=safe_name,
         short_text=f"Skipped {safe_name}.",
-        summary=reason,
+        summary="Tool was skipped." if reason else None,
         refs=[],
     )
 

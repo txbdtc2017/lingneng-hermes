@@ -33,8 +33,9 @@ def test_tool_started_maps_to_public_agent_step():
     event = agent_step_started(
         sequence=1,
         tool_name="retrieve_rag",
-        preview="query='sales'",
+        preview="query='secret sales api_key=secret'",
     )
+    dumped = event.model_dump_json()
 
     assert event.sequence == 1
     assert event.step_id == "tool-1"
@@ -42,8 +43,24 @@ def test_tool_started_maps_to_public_agent_step():
     assert event.status == "started"
     assert event.title == "retrieve_rag"
     assert event.short_text == "Starting retrieve_rag."
-    assert event.summary == "query='sales'"
+    assert event.summary == "Tool input received."
     assert event.refs == []
+    assert "secret sales" not in dumped
+    assert "api_key" not in dumped
+    assert "secret" not in dumped
+
+
+def test_tool_title_is_short_single_line_public_text():
+    event = agent_step_started(
+        sequence=9,
+        tool_name=f"{'retrieve_rag' * 12}\n中文",
+        preview=None,
+    )
+
+    assert len(event.title) <= 64
+    assert "\n" not in event.title
+    assert "中文" not in event.title
+    assert event.summary is None
 
 
 def test_tool_success_maps_to_public_agent_step():
@@ -66,14 +83,17 @@ def test_tool_skip_maps_to_public_agent_step():
     event = agent_step_skipped(
         sequence=3,
         tool_name="retrieve_rag",
-        reason="blocked by policy",
+        reason="blocked api_key=secret",
     )
+    dumped = event.model_dump_json()
 
     assert event.sequence == 3
     assert event.step_id == "tool-3"
     assert event.status == "skipped"
     assert event.short_text == "Skipped retrieve_rag."
-    assert event.summary == "blocked by policy"
+    assert event.summary == "Tool was skipped."
+    assert "api_key" not in dumped
+    assert "secret" not in dumped
 
 
 def test_tool_failure_does_not_leak_internal_exception_text():

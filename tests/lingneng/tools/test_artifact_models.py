@@ -1,4 +1,5 @@
 import json
+from urllib.parse import quote
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +25,13 @@ ARTIFACT = {
     "conversion_required": False,
     "conversion_owner": None,
 }
+
+
+def _percent_encode(value: str, rounds: int) -> str:
+    encoded = value
+    for _ in range(rounds):
+        encoded = quote(encoded, safe="")
+    return encoded
 
 
 def test_artifact_from_public_dict_accepts_java_fields():
@@ -66,6 +74,8 @@ def test_artifact_sanitizer_strips_unsafe_urls(url):
         "https://files.example.test//Users/rotas/report.pdf",
         "https://files.example.test/%2FUsers%2Frotas%2Freport.pdf",
         "https://files.example.test/reports/%5cUsers%5crotas%5creport.pdf",
+        f"https://files.example.test/{_percent_encode('/Users/rotas/report.pdf', 6)}",
+        f"https://files.example.test/{_percent_encode('/Users/rotas/report.pdf', 7)}",
     ],
 )
 def test_artifact_sanitizer_strips_unsafe_url_paths(url):
@@ -100,6 +110,8 @@ def test_artifact_sanitizer_keeps_safe_policy_url_path():
         "external/java-agent-file/%2e%2e/report.pdf",
         "external/java-agent-file/../secret.pdf",
         r"external/java-agent-file/C:\Users\rotas\report.pdf",
+        f"external/java-agent-file/{_percent_encode('../secret.pdf', 6)}",
+        f"external/java-agent-file/{_percent_encode('/Users/rotas/report.pdf', 6)}",
         "external/java-agent-file/\x00secret.pdf",
     ],
 )

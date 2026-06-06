@@ -159,9 +159,10 @@ def _sanitize_public_url(value: Any) -> str | None:
         return None
     if parts.username or parts.password:
         return None
-    decoded_path = _stable_percent_decode(parts.path)
+    decoded_path, path_stable = _stable_percent_decode(parts.path)
     if (
-        _CONTROL_CHAR_RE.search(decoded_path)
+        not path_stable
+        or _CONTROL_CHAR_RE.search(decoded_path)
         or _has_path_traversal(decoded_path)
         or _contains_embedded_local_path(decoded_path)
     ):
@@ -177,9 +178,10 @@ def _sanitize_object_key(value: Any) -> str | None:
     stripped = value.strip()
     if not stripped:
         return None
-    decoded = _stable_percent_decode(stripped)
+    decoded, decode_stable = _stable_percent_decode(stripped)
     if (
-        _CONTROL_CHAR_RE.search(stripped)
+        not decode_stable
+        or _CONTROL_CHAR_RE.search(stripped)
         or _CONTROL_CHAR_RE.search(decoded)
         or _looks_like_local_path(stripped)
         or _looks_like_local_path(decoded)
@@ -198,9 +200,10 @@ def _strip_control_chars(value: str) -> str:
 
 def _sanitize_public_string(value: str) -> str | None:
     clean_text = _strip_control_chars(value).strip()
-    decoded = _stable_percent_decode(clean_text)
+    decoded, decode_stable = _stable_percent_decode(clean_text)
     if (
-        _looks_like_local_path(clean_text)
+        not decode_stable
+        or _looks_like_local_path(clean_text)
         or _looks_like_local_path(decoded)
         or _contains_embedded_local_path(decoded)
         or _contains_secret_marker(decoded)
@@ -240,19 +243,22 @@ def _has_path_traversal(value: str) -> bool:
 def _query_looks_secret(query: str) -> bool:
     if not query:
         return False
-    decoded_query = _stable_percent_decode(query)
+    decoded_query, query_stable = _stable_percent_decode(query)
     if (
-        _CONTROL_CHAR_RE.search(decoded_query)
+        not query_stable
+        or _CONTROL_CHAR_RE.search(decoded_query)
         or _contains_embedded_local_path(decoded_query)
         or _contains_url_credentials_fragment(decoded_query)
         or _contains_secret_marker(decoded_query)
     ):
         return True
     for key, value in parse_qsl(query, keep_blank_values=True):
-        decoded_key = _stable_percent_decode(key)
-        decoded_value = _stable_percent_decode(value)
+        decoded_key, key_stable = _stable_percent_decode(key)
+        decoded_value, value_stable = _stable_percent_decode(value)
         if (
-            _CONTROL_CHAR_RE.search(decoded_key)
+            not key_stable
+            or not value_stable
+            or _CONTROL_CHAR_RE.search(decoded_key)
             or _CONTROL_CHAR_RE.search(decoded_value)
             or _contains_embedded_local_path(decoded_key)
             or _contains_embedded_local_path(decoded_value)
@@ -280,11 +286,11 @@ def _contains_url_credentials_fragment(value: str) -> bool:
     return _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None
 
 
-def _stable_percent_decode(value: str, *, max_rounds: int = 5) -> str:
+def _stable_percent_decode(value: str, *, max_rounds: int = 5) -> tuple[str, bool]:
     decoded = value
     for _ in range(max_rounds):
         next_decoded = unquote(decoded)
         if next_decoded == decoded:
-            break
+            return decoded, True
         decoded = next_decoded
-    return decoded
+    return decoded, unquote(decoded) == decoded

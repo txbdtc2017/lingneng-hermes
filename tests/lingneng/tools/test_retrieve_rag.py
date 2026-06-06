@@ -203,6 +203,82 @@ def test_retrieve_rag_success_strips_authorization_bearer_leaks(tmp_path):
     assert "abc123" not in dumped
 
 
+def test_retrieve_rag_success_strips_raw_input_and_credential_metadata(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="raw input: USER PRIVATE INPUT",
+            citations=[],
+            metadata={
+                "duration_ms": 12,
+                "query": "USER PRIVATE INPUT",
+                "input": "USER PRIVATE INPUT",
+                "password": "hunter2",
+                "passwd_hash": "hunter2",
+                "credential": "hunter2",
+                "nested": {
+                    "query": "USER PRIVATE INPUT",
+                    "safe": "public summary",
+                    "notes": [
+                        "raw query: USER PRIVATE INPUT",
+                        "password=hunter2",
+                        "public summary",
+                    ],
+                },
+                "items": [
+                    {"input": "USER PRIVATE INPUT", "source": "public-source"},
+                ],
+                "note": "raw request: USER PRIVATE INPUT",
+            },
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is True
+    assert result["context"] == ""
+    assert result["metadata"] == {
+        "duration_ms": 12,
+        "nested": {
+            "safe": "public summary",
+            "notes": ["", "", "public summary"],
+        },
+        "items": [{"source": "public-source"}],
+        "note": "",
+        "selected_count": 0,
+        "citation_count": 0,
+    }
+    assert "query" not in dumped
+    assert "input" not in dumped
+    assert "password" not in dumped
+    assert "passwd" not in dumped
+    assert "credential" not in dumped
+    assert "USER PRIVATE INPUT" not in dumped
+    assert "hunter2" not in dumped
+    assert "raw query" not in dumped
+    assert "raw input" not in dumped
+    assert "raw request" not in dumped
+
+
+def test_retrieve_rag_context_allows_benign_query_input_words(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="Customer query input routing policy.",
+            citations=[],
+            metadata={},
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    assert result["success"] is True
+    assert result["context"] == "Customer query input routing policy."
+
+
 def test_retrieve_rag_not_configured_is_safe(tmp_path):
     with rag_request_context(make_context(tmp_path), provider=None):
         result = json.loads(retrieve_rag_handler({"query": "需要资料"}))

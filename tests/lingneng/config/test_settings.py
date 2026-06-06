@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from lingneng.config.settings import LingNengSettings
 
 
@@ -100,3 +103,39 @@ def test_ready_summary_redacts_secret(tmp_path):
     assert summary["auth_required"] is True
     assert "secret-value" not in repr(summary)
     assert "internal_api_key" not in summary
+
+
+def test_phase_2_settings_include_session_db_path(tmp_path):
+    settings = LingNengSettings.from_env(
+        {"LINGNENG_RUNTIME_DIR": str(tmp_path / "runtime")}
+    )
+    direct_settings = LingNengSettings(runtime_dir=tmp_path / "direct-runtime")
+
+    assert settings.agent_mode == "fake"
+    assert settings.session_db_path == tmp_path / "runtime" / "sessions.sqlite3"
+    assert (
+        direct_settings.session_db_path
+        == tmp_path / "direct-runtime" / "sessions.sqlite3"
+    )
+
+
+def test_session_db_path_can_be_overridden(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "LINGNENG_SESSION_DB_PATH": str(tmp_path / "custom.sqlite3"),
+        }
+    )
+
+    assert settings.session_db_path == tmp_path / "custom.sqlite3"
+
+
+def test_agent_mode_accepts_hermes():
+    settings = LingNengSettings.from_env({"LINGNENG_AGENT_MODE": "hermes"})
+
+    assert settings.agent_mode == "hermes"
+
+
+def test_unknown_agent_mode_is_rejected():
+    with pytest.raises(ValidationError):
+        LingNengSettings.from_env({"LINGNENG_AGENT_MODE": "unsafe"})

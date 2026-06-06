@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 _LOCAL_ENVS = {"local", "dev", "test"}
+AgentMode = Literal["fake", "hermes"]
 
 
 def _bool_from_env(value: str | None, default: bool = False) -> bool:
@@ -23,7 +24,8 @@ class LingNengSettings(BaseModel):
     api_host: str = "127.0.0.1"
     api_port: int = 18083
     runtime_dir: Path = Path(".runtime/lingneng")
-    agent_mode: str = "fake"
+    session_db_path: Path | None = None
+    agent_mode: AgentMode = "fake"
     internal_api_key: str = Field(default="", repr=False)
     allow_insecure_local: bool = False
     session_retention_days: int = 90
@@ -31,9 +33,16 @@ class LingNengSettings(BaseModel):
     idempotency_retention_days: int = 7
     heartbeat_interval_seconds: float = 15.0
 
+    @model_validator(mode="after")
+    def _default_session_db_path(self) -> "LingNengSettings":
+        if self.session_db_path is None:
+            self.session_db_path = self.runtime_dir / "sessions.sqlite3"
+        return self
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "LingNengSettings":
         source = os.environ if env is None else env
+        session_db_value = source.get("LINGNENG_SESSION_DB_PATH")
         return cls(
             app_env=source.get("LINGNENG_APP_ENV", "dev"),
             api_host=source.get("LINGNENG_API_HOST", "127.0.0.1"),
@@ -41,6 +50,7 @@ class LingNengSettings(BaseModel):
             runtime_dir=Path(
                 source.get("LINGNENG_RUNTIME_DIR", ".runtime/lingneng")
             ),
+            session_db_path=Path(session_db_value) if session_db_value else None,
             agent_mode=source.get("LINGNENG_AGENT_MODE", "fake"),
             internal_api_key=source.get("LINGNENG_INTERNAL_API_KEY", ""),
             allow_insecure_local=_bool_from_env(
@@ -82,5 +92,6 @@ class LingNengSettings(BaseModel):
             "app_env": self.app_env,
             "agent_mode": self.agent_mode,
             "runtime_dir": str(self.runtime_dir),
+            "session_db_path": str(self.session_db_path),
             "auth_required": self.auth_required,
         }

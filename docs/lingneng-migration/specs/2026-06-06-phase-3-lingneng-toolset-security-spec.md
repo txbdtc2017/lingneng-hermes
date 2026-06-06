@@ -18,6 +18,7 @@ Phase 3 is limited to these runtime modules and tests:
 - Modify `lingneng/schemas/chat_events.py`
 - Modify `lingneng/events/bridge.py`
 - Modify `lingneng/runtime/hermes_adapter.py`
+- Modify `lingneng/api/routes.py`
 - Create `lingneng/tools/__init__.py`
 - Create `lingneng/tools/stubs.py`
 - Create `lingneng/tools/toolset.py`
@@ -351,6 +352,11 @@ callbacks to LingNeng event models.
 Owns wiring of `AIAgent` callbacks to the async LingNeng stream. It may import
 `lingneng.tools.toolset` for registration before constructing `AIAgent`.
 
+### `lingneng/api/routes.py`
+
+Owns route-level SSE event-name dispatch. Phase 3 may extend `_event_name()` to
+map `AgentStepEvent` to `agent_step`.
+
 ### Hermes Core
 
 `run_agent.py`, `agent/tool_executor.py`, `model_tools.py`, and
@@ -435,6 +441,7 @@ docs before commits.
   the Java API.
 - `agent_step` is a formal event model and can be emitted by the adapter from
   Hermes tool progress callbacks.
+- The chat route can encode `AgentStepEvent` as `event: agent_step`.
 - Public `agent_step` errors do not leak raw exception text or secrets.
 - Phase 1 and Phase 2 request/session/idempotency/SSE contracts continue to
   pass.

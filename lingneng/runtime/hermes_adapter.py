@@ -22,6 +22,7 @@ from lingneng.events.bridge import (
     dedupe_artifacts,
     dedupe_citations,
     final_answer,
+    is_artifact_producing_tool,
     rag_events_from_tool_result,
     run_started,
 )
@@ -128,17 +129,21 @@ class HermesAgentRunAdapter:
         streamed_text: list[str] = []
         rag_citations: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
+        buffered_answer_events: list[AnswerDeltaEvent] = []
+        active_artifact_tools = 0
 
         def on_delta(text: str | None) -> None:
             nonlocal sequence
             if not text:
                 return
-            sequence += 1
-            streamed_text.append(text)
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                answer_delta(text=text, sequence=sequence),
-            )
+            with tool_progress_lock:
+                sequence += 1
+                streamed_text.append(text)
+                event = answer_delta(text=text, sequence=sequence)
+                if active_artifact_tools:
+                    buffered_answer_events.append(event)
+                    return
+            loop.call_soon_threadsafe(queue.put_nowait, event)
 
         def on_tool_progress(
             event_name: str,
@@ -147,11 +152,13 @@ class HermesAgentRunAdapter:
             args: dict | None = None,
             **kwargs,
         ) -> None:
-            nonlocal tool_sequence
+            nonlocal active_artifact_tools, tool_sequence
             with tool_progress_lock:
                 events: list[LingNengStreamEvent]
                 if event_name == "tool.started":
                     tool_sequence += 1
+                    if is_artifact_producing_tool(tool_name):
+                        active_artifact_tools += 1
                     event = agent_step_started(
                         sequence=tool_sequence,
                         tool_name=tool_name,
@@ -191,6 +198,11 @@ class HermesAgentRunAdapter:
                             [*artifacts, *new_artifacts]
                         )
                     events = [event, *artifact_events, *rag_events]
+                    if is_artifact_producing_tool(tool_name):
+                        active_artifact_tools = max(0, active_artifact_tools - 1)
+                        if active_artifact_tools == 0 and buffered_answer_events:
+                            events.extend(buffered_answer_events)
+                            buffered_answer_events.clear()
                 elif event_name in {"tool.skipped", "tool.blocked"}:
                     tool_sequence += 1
                     event = agent_step_skipped(
@@ -199,6 +211,11 @@ class HermesAgentRunAdapter:
                         reason=kwargs.get("reason"),
                     )
                     events = [event]
+                    if is_artifact_producing_tool(tool_name):
+                        active_artifact_tools = max(0, active_artifact_tools - 1)
+                        if active_artifact_tools == 0 and buffered_answer_events:
+                            events.extend(buffered_answer_events)
+                            buffered_answer_events.clear()
                 else:
                     return
                 for event in events:
@@ -247,6 +264,12 @@ class HermesAgentRunAdapter:
                     yield _public_runtime_error(run_id, request.request_id)
                     return
                 final_text = result.final_response
+                with tool_progress_lock:
+                    pending_answer_events = list(buffered_answer_events)
+                    buffered_answer_events.clear()
+                    active_artifact_tools = 0
+                for event in pending_answer_events:
+                    yield event
                 if not streamed_text:
                     sequence += 1
                     yield answer_delta(text=final_text, sequence=sequence)

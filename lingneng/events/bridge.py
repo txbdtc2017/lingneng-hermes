@@ -203,7 +203,7 @@ def artifact_events_from_tool_result(
     tool_name: str,
     result: Any,
 ) -> tuple[list[ArtifactCreatedEvent], list[dict[str, Any]]]:
-    if tool_name not in _ARTIFACT_TOOL_NAMES:
+    if not is_artifact_producing_tool(tool_name):
         return [], []
 
     payload = _parse_tool_result(result)
@@ -220,6 +220,10 @@ def artifact_events_from_tool_result(
         for artifact in artifacts
     ]
     return events, artifacts
+
+
+def is_artifact_producing_tool(tool_name: str) -> bool:
+    return tool_name in _ARTIFACT_TOOL_NAMES
 
 
 def dedupe_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:

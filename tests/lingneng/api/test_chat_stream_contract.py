@@ -222,6 +222,27 @@ def test_invalid_session_key_segment_returns_non_sse_422_without_adapter(tmp_pat
     assert store.count_runs() == 0
 
 
+@pytest.mark.parametrize("request_id", ["", "   "])
+def test_empty_request_id_returns_non_sse_422_without_adapter(tmp_path, request_id):
+    adapter = CountingFinalAdapter()
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    app = create_app(settings=settings(tmp_path), adapter=adapter, run_store=store)
+    payload = full_payload()
+    payload["request_id"] = request_id
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/internal/agent/chat/stream",
+        json=payload,
+        headers={"X-Internal-Key": INTERNAL_KEY},
+    )
+
+    assert response.status_code == 422
+    assert "text/event-stream" not in response.headers.get("content-type", "")
+    assert response.json() == {"detail": "Invalid chat request"}
+    assert adapter.calls == 0
+    assert store.count_runs() == 0
+
+
 def test_local_like_empty_key_without_explicit_allow_returns_non_sse_503(tmp_path):
     response = client(
         tmp_path,

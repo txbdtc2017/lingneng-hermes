@@ -120,3 +120,10 @@ class ChatStreamRequest(JavaPayloadModel):
     model_options: ModelOptions = Field(default_factory=ModelOptions)
     regenerate: RegenerateOptions = Field(default_factory=RegenerateOptions)
     routing: RoutingOptions = Field(default_factory=RoutingOptions)
+
+    @field_validator("request_id")
+    @classmethod
+    def request_id_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("request_id must not be empty")
+        return value

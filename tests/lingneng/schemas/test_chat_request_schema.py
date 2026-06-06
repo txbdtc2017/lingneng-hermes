@@ -183,6 +183,15 @@ def test_rejects_empty_query_content(content):
         ChatStreamRequest.model_validate(payload)
 
 
+@pytest.mark.parametrize("request_id", ["", "   "])
+def test_rejects_empty_request_id(request_id):
+    payload = full_payload()
+    payload["request_id"] = request_id
+
+    with pytest.raises(ValidationError):
+        ChatStreamRequest.model_validate(payload)
+
+
 def test_rejects_unknown_employee_type():
     payload = full_payload()
     payload["employee"]["employee_type"] = "unknown_employee"

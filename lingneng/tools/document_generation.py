@@ -301,14 +301,24 @@ def _public_result(
         if message
         else _public_message(public_code, tool_name)
     )
+    public_artifacts = list(artifacts or [])
+    metadata_value = _sanitize_mapping(metadata or {})
+    total_artifacts = len(public_artifacts)
+    if total_artifacts > _MAX_PUBLIC_ITEMS:
+        public_artifacts = public_artifacts[:_MAX_PUBLIC_ITEMS]
+        _mark_artifacts_truncated(
+            metadata_value,
+            total_count=total_artifacts,
+            kept_count=len(public_artifacts),
+        )
     return {
         "success": success,
         "tool_name": tool_name,
         "status": status,
         "summary": public_summary,
         "safe_output": _sanitize_mapping(safe_output or {}),
-        "artifacts": artifacts or [],
-        "metadata": _sanitize_mapping(metadata or {}),
+        "artifacts": public_artifacts,
+        "metadata": metadata_value,
         "code": public_code,
         "message": public_message,
     }
@@ -437,8 +447,42 @@ def _json_result(
         "omitted_count": omitted_count,
         "tool_result_max_chars": max_chars,
     }
-    serialized = json.dumps(bounded, ensure_ascii=False)
-    return serialized
+    artifacts = list(bounded.get("artifacts") or [])
+    original_artifact_total = _artifact_total_count(value.get("metadata"), artifacts)
+    while True:
+        serialized = json.dumps(bounded, ensure_ascii=False)
+        if len(serialized) <= max_chars or not artifacts:
+            return serialized
+        artifacts = artifacts[:-1]
+        bounded["artifacts"] = artifacts
+        _mark_artifacts_truncated(
+            bounded["metadata"],
+            total_count=original_artifact_total,
+            kept_count=len(artifacts),
+        )
+
+
+def _mark_artifacts_truncated(
+    metadata: dict[str, Any],
+    *,
+    total_count: int,
+    kept_count: int,
+) -> None:
+    omitted_count = max(0, total_count - kept_count)
+    if not omitted_count:
+        return
+    metadata["truncated"] = True
+    metadata["artifact_total_count"] = total_count
+    metadata["artifact_omitted_count"] = omitted_count
+    metadata["artifact_kept_count"] = kept_count
+
+
+def _artifact_total_count(metadata: Any, artifacts: list[Any]) -> int:
+    if isinstance(metadata, dict):
+        value = metadata.get("artifact_total_count")
+        if isinstance(value, int) and value >= len(artifacts):
+            return value
+    return len(artifacts)
 
 
 def _count_public_items(value: Any) -> int:

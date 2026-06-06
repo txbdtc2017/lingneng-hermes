@@ -283,6 +283,20 @@ class OversizedDocumentProvider:
         )
 
 
+class ManyArtifactsDocumentProvider:
+    def generate(self, request: Any) -> DocumentGenerationResult:
+        del request
+        artifacts = [
+            {
+                **DOC_ARTIFACT,
+                "artifact_id": f"artifact-doc-{index}",
+                "object_key": f"external/java-agent-file/artifact-doc-{index}",
+            }
+            for index in range(200)
+        ]
+        return DocumentGenerationResult(summary="ok", artifacts=artifacts)
+
+
 class OversizedImageProvider:
     def generate(self, request: Any) -> ImageGenerationResult:
         del request
@@ -534,6 +548,26 @@ def test_generation_tool_results_are_bounded_by_public_budget(tmp_path):
             result["metadata"].get("truncated") is True
             or result["safe_output"].get("truncated") is True
         )
+
+
+def test_generation_tool_result_truncates_many_valid_artifacts(tmp_path):
+    cfg = small_output_settings(tmp_path)
+
+    with document_generation_context(
+        cfg,
+        provider=ManyArtifactsDocumentProvider(),
+    ):
+        raw_result = document_generation_handler({"instruction": "x"})
+    result = json.loads(raw_result)
+
+    assert len(raw_result) <= cfg.tool_result_max_chars
+    assert result["success"] is True
+    assert result["tool_name"] == "document_generation"
+    assert result["artifacts"]
+    assert len(result["artifacts"]) < 200
+    assert result["metadata"]["truncated"] is True
+    assert result["metadata"]["artifact_omitted_count"] > 0
+    assert result["metadata"]["artifact_total_count"] == 200
 
 
 def test_provider_exceptions_return_safe_public_failures(tmp_path):

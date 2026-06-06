@@ -220,7 +220,7 @@ class ConcurrentKanbanEnvAgent:
 
 
 @pytest.mark.asyncio
-async def test_hermes_adapter_constructs_agent_with_no_tool_lingneng_context(
+async def test_hermes_adapter_constructs_agent_with_lingneng_tool_context(
     tmp_path,
 ):
     CapturingAgent.calls = []
@@ -236,13 +236,33 @@ async def test_hermes_adapter_constructs_agent_with_no_tool_lingneng_context(
     kwargs = CapturingAgent.calls[0]
     assert kwargs["platform"] == "lingneng"
     assert kwargs["session_id"] == resolved.session_key
-    assert kwargs["enabled_toolsets"] == []
+    assert kwargs["enabled_toolsets"] == ["lingneng"]
     assert kwargs["disabled_toolsets"] == ["kanban"]
     assert kwargs["quiet_mode"] is True
     assert kwargs["skip_context_files"] is True
     assert kwargs["skip_memory"] is True
     assert kwargs["session_db"].db_path == tmp_path / "sessions.sqlite3"
     assert events[-1].answer == "完成"
+
+
+def test_hermes_adapter_import_does_not_register_lingneng_tools_in_fake_mode():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import lingneng.runtime; "
+                "print('lingneng.tools.toolset' in sys.modules)"
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.stdout.strip() == "False"
 
 
 @pytest.mark.asyncio

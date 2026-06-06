@@ -14,6 +14,7 @@ from lingneng.api.sse import encode_sse, with_heartbeats
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.agent_adapter import AgentRunAdapter
 from lingneng.schemas.chat_events import (
+    AgentStepEvent,
     AnswerDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -225,10 +226,12 @@ def _resolve_chat_session_key(request: ChatStreamRequest) -> ResolvedSessionKey:
 
 
 def _event_name(
-    event: RunStartedEvent | AnswerDeltaEvent | FinalEvent | ErrorEvent,
+    event: RunStartedEvent | AgentStepEvent | AnswerDeltaEvent | FinalEvent | ErrorEvent,
 ) -> str:
     if isinstance(event, RunStartedEvent):
         return "run_started"
+    if isinstance(event, AgentStepEvent):
+        return "agent_step"
     if isinstance(event, AnswerDeltaEvent):
         return "answer_delta"
     if isinstance(event, FinalEvent):

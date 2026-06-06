@@ -3,6 +3,7 @@ import pytest
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.schemas.chat_events import (
+    AgentStepEvent,
     AnswerDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -56,6 +57,30 @@ class FailingAgent:
 
     def run_conversation(self, *args, **kwargs):
         raise RuntimeError("private provider detail")
+
+
+class ToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.tool_progress_callback(
+            "tool.started",
+            "retrieve_rag",
+            "query='sales api_key=secret'",
+            {"query": "sales api_key=secret"},
+        )
+        self.tool_progress_callback(
+            "tool.completed",
+            "retrieve_rag",
+            None,
+            None,
+            duration=0.25,
+            is_error=False,
+            result='{"success": false, "code": "NOT_CONFIGURED"}',
+        )
+        return {"final_response": "完成", "messages": []}
 
 
 def request_and_session():
@@ -126,3 +151,24 @@ async def test_hermes_exception_maps_to_public_error(tmp_path):
     assert error.code == "RUNTIME_ERROR"
     assert error.message == "Agent runtime failed"
     assert error.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_callback_becomes_agent_step_events(tmp_path):
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(settings(tmp_path), agent_cls=ToolProgressAgent)
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    agent_steps = [event for event in events if isinstance(event, AgentStepEvent)]
+    started_dumped = agent_steps[0].model_dump_json()
+
+    assert [event.status for event in agent_steps] == ["started", "succeeded"]
+    assert [event.sequence for event in agent_steps] == [1, 2]
+    assert agent_steps[0].short_text == "Starting retrieve_rag."
+    assert agent_steps[0].summary == "Tool input received."
+    assert "api_key" not in started_dumped
+    assert "secret" not in started_dumped
+    assert agent_steps[1].short_text == "Completed retrieve_rag."
+    assert agent_steps[1].summary == "Duration: 0.25s"
+    assert isinstance(events[-1], FinalEvent)
+    assert events[-1].answer == "完成"

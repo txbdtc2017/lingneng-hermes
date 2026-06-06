@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Protocol, Union
 
 from lingneng.schemas.chat_events import (
+    AgentStepEvent,
     AnswerDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -15,6 +16,7 @@ from lingneng.session.keys import ResolvedSessionKey
 
 LingNengStreamEvent = Union[
     RunStartedEvent,
+    AgentStepEvent,
     AnswerDeltaEvent,
     FinalEvent,
     ErrorEvent,

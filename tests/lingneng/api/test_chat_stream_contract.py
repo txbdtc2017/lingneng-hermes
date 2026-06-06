@@ -10,6 +10,7 @@ from lingneng.api.routes import _adapter_stream
 from lingneng.api.sse import with_heartbeats
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import (
+    AgentStepEvent,
     AnswerDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -66,6 +67,46 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
             )
         )
     return frames
+
+
+class AgentStepAdapter:
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[RunStartedEvent | AgentStepEvent | AnswerDeltaEvent | FinalEvent]:
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield AgentStepEvent(
+            sequence=1,
+            step_id="tool-1",
+            phase="tool",
+            status="started",
+            title="retrieve_rag",
+            short_text="Starting retrieve_rag.",
+            refs=[],
+        )
+        yield AnswerDeltaEvent(text="完成", sequence=1)
+        yield FinalEvent(run_id=run_id, status="succeeded", answer="完成")
+
+
+def test_chat_stream_encodes_agent_step_event(tmp_path):
+    app = create_app(
+        settings=settings(tmp_path),
+        adapter=AgentStepAdapter(),
+        run_store=LingNengRunStore(tmp_path / "runs.sqlite3"),
+    )
+    response = post_stream(TestClient(app), full_payload())
+    frames = parse_sse(response.text)
+
+    assert response.status_code == 200
+    assert [event_name for event_name, _data in frames] == [
+        "run_started",
+        "agent_step",
+        "answer_delta",
+        "final",
+    ]
+    assert frames[1][1]["status"] == "started"
 
 
 def test_health_returns_ok(tmp_path):

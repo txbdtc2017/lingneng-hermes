@@ -13,9 +13,16 @@ from typing import Any
 from run_agent import AIAgent
 
 from lingneng.config.settings import LingNengSettings
-from lingneng.events.bridge import answer_delta, final_answer, run_started
+from lingneng.events.bridge import (
+    agent_step_completed,
+    agent_step_skipped,
+    agent_step_started,
+    answer_delta,
+    final_answer,
+    run_started,
+)
 from lingneng.runtime.agent_adapter import LingNengStreamEvent
-from lingneng.schemas.chat_events import AnswerDeltaEvent, ErrorEvent
+from lingneng.schemas.chat_events import AgentStepEvent, AnswerDeltaEvent, ErrorEvent
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.hermes_session import LingNengHermesSessionStore
 from lingneng.session.keys import ResolvedSessionKey
@@ -84,9 +91,11 @@ class HermesAgentRunAdapter:
     ) -> AsyncIterator[LingNengStreamEvent]:
         yield run_started(run_id=run_id, request_id=request.request_id)
 
-        queue: asyncio.Queue[AnswerDeltaEvent | _ThreadResult] = asyncio.Queue()
+        queue: asyncio.Queue[AgentStepEvent | AnswerDeltaEvent | _ThreadResult]
+        queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         sequence = 0
+        tool_sequence = 0
         streamed_text: list[str] = []
 
         def on_delta(text: str | None) -> None:
@@ -100,6 +109,41 @@ class HermesAgentRunAdapter:
                 answer_delta(text=text, sequence=sequence),
             )
 
+        def on_tool_progress(
+            event_name: str,
+            tool_name: str,
+            preview: str | None = None,
+            args: dict | None = None,
+            **kwargs,
+        ) -> None:
+            nonlocal tool_sequence
+            if event_name == "tool.started":
+                tool_sequence += 1
+                event = agent_step_started(
+                    sequence=tool_sequence,
+                    tool_name=tool_name,
+                    preview=preview,
+                )
+            elif event_name == "tool.completed":
+                tool_sequence += 1
+                event = agent_step_completed(
+                    sequence=tool_sequence,
+                    tool_name=tool_name,
+                    duration=kwargs.get("duration"),
+                    is_error=bool(kwargs.get("is_error")),
+                    result=kwargs.get("result"),
+                )
+            elif event_name in {"tool.skipped", "tool.blocked"}:
+                tool_sequence += 1
+                event = agent_step_skipped(
+                    sequence=tool_sequence,
+                    tool_name=tool_name,
+                    reason=kwargs.get("reason"),
+                )
+            else:
+                return
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
         def run_agent() -> _ThreadResult:
             try:
                 with _without_kanban_worker_env():
@@ -109,6 +153,7 @@ class HermesAgentRunAdapter:
                     agent = self._build_agent(
                         resolved_session,
                         stream_delta_callback=on_delta,
+                        tool_progress_callback=on_tool_progress,
                     )
                     self._last_agent_for_tests = agent
                     result = agent.run_conversation(
@@ -149,17 +194,21 @@ class HermesAgentRunAdapter:
         self,
         resolved_session: ResolvedSessionKey,
         stream_delta_callback=None,
+        tool_progress_callback=None,
     ):
+        import lingneng.tools.toolset  # noqa: F401
+
         agent = self.agent_cls(
             platform="lingneng",
             session_id=resolved_session.session_key,
             session_db=self.session_store.db,
-            enabled_toolsets=[],
+            enabled_toolsets=["lingneng"],
             disabled_toolsets=["kanban"],
             quiet_mode=True,
             skip_context_files=True,
             skip_memory=True,
             stream_delta_callback=stream_delta_callback,
+            tool_progress_callback=tool_progress_callback,
         )
         _install_lingneng_activity_tracker(agent)
         return agent

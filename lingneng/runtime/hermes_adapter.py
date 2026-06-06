@@ -37,6 +37,7 @@ from lingneng.tools.rag import (
     build_rag_request_context,
     rag_request_context,
 )
+from lingneng.tools.web_search import lingneng_tool_context
 
 
 _KANBAN_ENV_KEYS = (
@@ -248,28 +249,29 @@ class HermesAgentRunAdapter:
                     history = self.session_store.load_conversation_history(
                         resolved_session
                     )
-                    agent = self._build_agent(
-                        resolved_session,
-                        stream_delta_callback=on_delta,
-                        tool_progress_callback=on_tool_progress,
-                    )
-                    self._last_agent_for_tests = agent
-                    rag_context = build_rag_request_context(
-                        settings=self.settings,
-                        request=request,
-                        resolved_session=resolved_session,
-                    )
-                    with rag_request_context(
-                        rag_context,
-                        provider=_build_rag_provider(self.settings),
-                    ):
-                        result = agent.run_conversation(
-                            request.query.content,
-                            system_message=self._build_system_message(request),
-                            conversation_history=history,
-                            task_id=run_id,
-                            persist_user_message=request.query.content,
+                    with lingneng_tool_context(self.settings):
+                        agent = self._build_agent(
+                            resolved_session,
+                            stream_delta_callback=on_delta,
+                            tool_progress_callback=on_tool_progress,
                         )
+                        self._last_agent_for_tests = agent
+                        rag_context = build_rag_request_context(
+                            settings=self.settings,
+                            request=request,
+                            resolved_session=resolved_session,
+                        )
+                        with rag_request_context(
+                            rag_context,
+                            provider=_build_rag_provider(self.settings),
+                        ):
+                            result = agent.run_conversation(
+                                request.query.content,
+                                system_message=self._build_system_message(request),
+                                conversation_history=history,
+                                task_id=run_id,
+                                persist_user_message=request.query.content,
+                            )
                 return _ThreadResult(
                     final_response=_final_response_from_result(result)
                 )

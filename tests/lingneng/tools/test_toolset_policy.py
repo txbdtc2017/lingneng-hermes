@@ -7,7 +7,9 @@ from pathlib import Path
 
 import lingneng.tools.toolset  # noqa: F401
 import model_tools
+from lingneng.config.settings import LingNengSettings
 from lingneng.tools.stubs import LINGNENG_TOOL_NAMES, handler_for
+from lingneng.tools.web_search import lingneng_tool_context, web_search_context
 from model_tools import get_tool_definitions
 from toolsets import resolve_toolset, validate_toolset
 from tools.registry import ToolRegistry, registry
@@ -36,6 +38,7 @@ REAL_PHASE_5_TOOLS = {
 }
 
 STUB_ONLY_TOOLS = APPROVED_LINGNENG_TOOLS - REAL_PHASE_5_TOOLS
+COLLIDING_LINGNENG_TOOL_NAMES = {"web_search"}
 
 DISALLOWED_HERMES_TOOLS = {
     "terminal",
@@ -72,6 +75,10 @@ DISALLOWED_HERMES_TOOLS = {
 }
 
 
+def settings(tmp_path: Path) -> LingNengSettings:
+    return LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+
 def test_lingneng_tools_package_import_is_lightweight():
     code = (
         "import sys\n"
@@ -103,15 +110,19 @@ def test_lingneng_tool_registry_entries_are_registered():
     for tool_name in APPROVED_LINGNENG_TOOLS:
         entry = registry.get_entry(tool_name)
         assert entry is not None
-        assert entry.toolset == "lingneng"
+        if tool_name in COLLIDING_LINGNENG_TOOL_NAMES:
+            assert entry.toolset != "lingneng"
+        else:
+            assert entry.toolset == "lingneng"
 
 
-def test_lingneng_tool_definitions_expose_only_lingneng_schemas():
-    definitions = get_tool_definitions(
-        enabled_toolsets=["lingneng"],
-        disabled_toolsets=["kanban"],
-        quiet_mode=True,
-    )
+def test_lingneng_tool_definitions_expose_only_lingneng_schemas(tmp_path):
+    with lingneng_tool_context(settings(tmp_path)):
+        definitions = get_tool_definitions(
+            enabled_toolsets=["lingneng"],
+            disabled_toolsets=["kanban"],
+            quiet_mode=True,
+        )
     names = {tool["function"]["name"] for tool in definitions}
 
     assert names == APPROVED_LINGNENG_TOOLS
@@ -122,6 +133,11 @@ def test_lingneng_tool_definitions_expose_only_lingneng_schemas():
         assert schema["parameters"]["type"] == "object"
         assert "properties" in schema["parameters"]
         assert schema["parameters"]["additionalProperties"] is False
+    web_search_schema = next(
+        item["function"] for item in definitions if item["function"]["name"] == "web_search"
+    )
+    assert "top_k" in web_search_schema["parameters"]["properties"]
+    assert "limit" not in web_search_schema["parameters"]["properties"]
 
 
 def test_lingneng_toolset_ignores_registry_extra_tools(monkeypatch):
@@ -200,7 +216,11 @@ def test_retrieve_rag_registered_handler_is_not_phase_3_stub():
 
 def test_phase_5_real_handlers_are_not_phase_3_stubs_when_unconfigured():
     for tool_name in REAL_PHASE_5_TOOLS - {"retrieve_rag"}:
-        result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
+        if tool_name == "web_search":
+            with web_search_context(settings(Path(".runtime/test")), provider=None):
+                result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
+        else:
+            result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
 
         assert result["success"] is False
         assert result["tool_name"] == tool_name

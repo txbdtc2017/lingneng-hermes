@@ -24,9 +24,11 @@ from lingneng.tools.image_generation import (
 )
 from lingneng.tools.web_search import (
     WebSearchResult,
+    lingneng_tool_context,
     web_search_context,
     web_search_handler,
 )
+from model_tools import get_tool_definitions
 from tools.registry import registry
 
 
@@ -394,28 +396,46 @@ def test_registry_dispatch_web_search_uses_lingneng_controlled_handler(tmp_path)
 
     import lingneng.tools.toolset  # noqa: F401
 
-    entry = registry.get_entry("web_search")
-    assert entry is not None
-    assert entry.toolset == "lingneng"
-    assert entry.handler.__module__ == "lingneng.tools.web_search"
-
     with web_search_context(settings(tmp_path), provider=provider):
+        definitions = get_tool_definitions(
+            enabled_toolsets=["lingneng"],
+            disabled_toolsets=["kanban"],
+            quiet_mode=True,
+        )
+        schema = next(
+            item["function"]
+            for item in definitions
+            if item["function"]["name"] == "web_search"
+        )
         result = json.loads(registry.dispatch("web_search", {"query": "搜索"}))
 
+    assert set(schema["parameters"]["properties"]) == {
+        "query",
+        "top_k",
+        "recency_filter",
+        "site_filter",
+    }
     assert result["tool_name"] == "web_search"
     assert provider.request.query == "搜索"
 
 
-def test_lingneng_web_search_overrides_preexisting_hermes_web_search():
+def test_lingneng_web_search_does_not_override_hermes_web_search():
     repo_root = Path(__file__).resolve().parents[3]
     code = (
         "import tools.web_tools\n"
+        "from model_tools import get_tool_definitions\n"
         "from tools.registry import registry\n"
         "assert registry.get_entry('web_search').toolset == 'web'\n"
         "import lingneng.tools.toolset\n"
         "entry = registry.get_entry('web_search')\n"
-        "assert entry.toolset == 'lingneng'\n"
-        "assert entry.handler.__module__ == 'lingneng.tools.web_search'\n"
+        "assert entry.toolset == 'web'\n"
+        "assert entry.handler.__module__ == 'tools.web_tools'\n"
+        "entry.check_fn = lambda: True\n"
+        "defs = get_tool_definitions(enabled_toolsets=['web'], disabled_toolsets=['kanban'], quiet_mode=True)\n"
+        "schema = [item['function'] for item in defs if item['function']['name'] == 'web_search'][0]\n"
+        "props = set(schema['parameters']['properties'])\n"
+        "assert 'limit' in props\n"
+        "assert props.isdisjoint({'top_k', 'recency_filter', 'site_filter'})\n"
     )
 
     completed = subprocess.run(
@@ -428,3 +448,39 @@ def test_lingneng_web_search_overrides_preexisting_hermes_web_search():
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_lingneng_web_search_schema_context_does_not_pollute_hermes_web_schema(
+    tmp_path,
+):
+    import lingneng.tools.toolset  # noqa: F401
+    entry = registry.get_entry("web_search")
+    assert entry is not None
+    entry.check_fn = lambda: True
+
+    with lingneng_tool_context(settings(tmp_path)):
+        lingneng_defs = get_tool_definitions(
+            enabled_toolsets=["lingneng"],
+            disabled_toolsets=["kanban"],
+            quiet_mode=True,
+        )
+        lingneng_schema = next(
+            item["function"]
+            for item in lingneng_defs
+            if item["function"]["name"] == "web_search"
+        )
+
+    web_defs = get_tool_definitions(
+        enabled_toolsets=["web"],
+        disabled_toolsets=["kanban"],
+        quiet_mode=True,
+    )
+    web_schema = next(
+        item["function"]
+        for item in web_defs
+        if item["function"]["name"] == "web_search"
+    )
+
+    assert "top_k" in lingneng_schema["parameters"]["properties"]
+    assert "limit" in web_schema["parameters"]["properties"]
+    assert "top_k" not in web_schema["parameters"]["properties"]

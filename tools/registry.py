@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +106,31 @@ class ToolEntry:
         self.dynamic_schema_overrides = dynamic_schema_overrides
 
 
+class ToolContextOverride:
+    """Context-scoped replacement for a tool schema/handler.
+
+    Overrides do not replace the canonical registry entry returned by
+    ``get_entry()``. They are consulted only by definition generation and
+    dispatch while their ``is_active`` predicate is true.
+    """
+
+    __slots__ = ("name", "schema", "handler", "is_active", "is_async")
+
+    def __init__(
+        self,
+        name: str,
+        schema: dict,
+        handler: Callable,
+        is_active: Callable[[], bool],
+        is_async: bool,
+    ) -> None:
+        self.name = name
+        self.schema = schema
+        self.handler = handler
+        self.is_active = is_active
+        self.is_async = is_async
+
+
 # ---------------------------------------------------------------------------
 # check_fn TTL cache
 #
@@ -155,6 +180,7 @@ class ToolRegistry:
         self._tools: Dict[str, ToolEntry] = {}
         self._toolset_checks: Dict[str, Callable] = {}
         self._toolset_aliases: Dict[str, str] = {}
+        self._context_overrides: Dict[str, ToolContextOverride] = {}
         # MCP dynamic refresh can mutate the registry while other threads are
         # reading tool metadata, so keep mutations serialized and readers on
         # stable snapshots.
@@ -194,9 +220,65 @@ class ToolRegistry:
         with self._lock:
             return self._tools.get(name)
 
+    def register_context_override(
+        self,
+        name: str,
+        schema: dict,
+        handler: Callable,
+        is_active: Callable[[], bool],
+        is_async: bool = False,
+    ) -> None:
+        """Register a context-scoped schema/handler override for *name*.
+
+        This is intentionally narrower than ``register(..., override=True)``:
+        the canonical tool entry remains untouched, and ordinary Hermes
+        toolsets keep their original schema/handler unless the caller has
+        activated the override context.
+        """
+        with self._lock:
+            self._context_overrides[name] = ToolContextOverride(
+                name=name,
+                schema=schema,
+                handler=handler,
+                is_active=is_active,
+                is_async=is_async,
+            )
+            self._generation += 1
+
+    def get_context_override_cache_key(self) -> tuple[str, ...]:
+        """Return active context override names for schema cache keys."""
+        return tuple(
+            sorted(
+                override.name
+                for override in self._snapshot_context_overrides()
+                if self._context_override_is_active(override)
+            )
+        )
+
     def get_registered_toolset_names(self) -> List[str]:
         """Return sorted unique toolset names present in the registry."""
         return sorted({entry.toolset for entry in self._snapshot_entries()})
+
+    def _snapshot_context_overrides(self) -> List[ToolContextOverride]:
+        with self._lock:
+            return list(self._context_overrides.values())
+
+    def _active_context_override(self, name: str) -> ToolContextOverride | None:
+        with self._lock:
+            override = self._context_overrides.get(name)
+        if override is None or not self._context_override_is_active(override):
+            return None
+        return override
+
+    def _context_override_is_active(self, override: ToolContextOverride) -> bool:
+        try:
+            return bool(override.is_active())
+        except Exception:
+            logger.debug(
+                "Tool context override '%s' active predicate raised",
+                override.name,
+            )
+            return False
 
     def get_tool_names_for_toolset(self, toolset: str) -> List[str]:
         """Return sorted tool names registered under a given toolset."""
@@ -352,6 +434,11 @@ class ToolRegistry:
         check_results: Dict[Callable, bool] = {}
         entries_by_name = {entry.name: entry for entry in self._snapshot_entries()}
         for name in sorted(tool_names):
+            override = self._active_context_override(name)
+            if override is not None:
+                schema_with_name = {**override.schema, "name": name}
+                result.append({"type": "function", "function": schema_with_name})
+                continue
             entry = entries_by_name.get(name)
             if not entry:
                 continue
@@ -395,13 +482,16 @@ class ToolRegistry:
           for consistent error format.
         """
         entry = self.get_entry(name)
-        if not entry:
+        override = self._active_context_override(name)
+        if not entry and not override:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
-            if entry.is_async:
+            handler = override.handler if override is not None else entry.handler
+            is_async = override.is_async if override is not None else entry.is_async
+            if is_async:
                 from model_tools import _run_async
-                return _run_async(entry.handler(args, **kwargs))
-            return entry.handler(args, **kwargs)
+                return _run_async(handler(args, **kwargs))
+            return handler(args, **kwargs)
         except Exception as e:
             logger.exception("Tool %s dispatch error: %s", name, e)
             # Route through the sanitizer so framing tokens / CDATA / fences

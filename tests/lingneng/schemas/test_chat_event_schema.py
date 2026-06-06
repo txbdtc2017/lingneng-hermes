@@ -1,5 +1,7 @@
 from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
+    Artifact,
+    ArtifactCreatedEvent,
     Citation,
     CitationDeltaEvent,
     ErrorEvent,
@@ -91,3 +93,32 @@ def test_rag_event_payloads_dump_without_event_field():
     assert context.model_dump()["status"] == "hit"
     assert "event" not in delta.model_dump()
     assert "event" not in context.model_dump()
+
+
+def test_artifact_event_payloads_dump_without_event_field():
+    artifact = Artifact(
+        artifact_id="artifact-doc-1",
+        artifact_type="document",
+        source="document_generation",
+        file_name="report.pdf",
+        mime_type="application/pdf",
+        url="https://files.example.test/report.pdf",
+        object_key="external/java-agent-file/artifact-doc-1",
+        format="pdf",
+        target_format="pdf",
+        conversion_required=False,
+        conversion_owner=None,
+    )
+    event = ArtifactCreatedEvent.model_validate(artifact.model_dump())
+    final = FinalEvent(
+        run_id="run-1",
+        status="succeeded",
+        answer="完成",
+        artifacts=[artifact],
+    )
+
+    assert event.artifact_id == "artifact-doc-1"
+    assert event.model_dump()["artifact_type"] == "document"
+    assert final.model_dump()["artifacts"][0]["artifact_id"] == "artifact-doc-1"
+    assert "event" not in event.model_dump()
+    assert "event" not in final.model_dump()

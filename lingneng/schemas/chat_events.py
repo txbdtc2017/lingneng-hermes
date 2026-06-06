@@ -22,6 +22,7 @@ FORMAL_EVENT_NAMES = [
 
 FINAL_STATUSES = {"succeeded", "degraded", "failed", "blocked"}
 FinalStatus = Literal["succeeded", "degraded", "failed", "blocked"]
+ArtifactType = Literal["image", "document"]
 AgentStepPhase = Literal["tool"]
 AgentStepStatus = Literal["started", "succeeded", "skipped", "failed"]
 
@@ -72,12 +73,30 @@ class RagContextEvent(LingNengEventModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class Artifact(LingNengEventModel):
+    artifact_id: str
+    artifact_type: ArtifactType
+    source: str
+    file_name: str
+    mime_type: str
+    url: str
+    object_key: str
+    format: str | None = None
+    target_format: str | None = None
+    conversion_required: bool = False
+    conversion_owner: str | None = None
+
+
+class ArtifactCreatedEvent(Artifact):
+    pass
+
+
 class FinalEvent(LingNengEventModel):
     run_id: str
     status: FinalStatus
     answer: str
     citations: list[Citation] = Field(default_factory=list)
-    artifacts: list[dict] = Field(default_factory=list)
+    artifacts: list[Artifact] = Field(default_factory=list)
 
 
 class ErrorEvent(LingNengEventModel):

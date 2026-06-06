@@ -161,6 +161,32 @@ def test_skill_and_rag_settings_defaults_are_safe(tmp_path):
     assert settings.rag_context_max_chars == 6000
 
 
+def test_phase_5_artifact_generation_and_attachment_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_APP_ENV": "test",
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_INTERNAL_API_KEY": "key",
+        }
+    )
+
+    assert settings.artifact_public_base_url == ""
+    assert settings.artifact_url_allowed_hosts == []
+    assert settings.tool_result_max_chars == 6000
+    assert settings.document_max_content_chars == 20000
+    assert settings.image_max_count == 4
+    assert settings.generation_timeout_seconds == 300.0
+    assert settings.web_search_default_top_k == 5
+    assert settings.web_search_max_top_k == 10
+    assert settings.attachment_allowed_hosts == []
+    assert settings.attachment_max_files == 5
+    assert settings.attachment_max_total_bytes == 52428800
+    assert settings.attachment_max_file_bytes == 20971520
+    assert settings.attachment_max_image_bytes == 10485760
+    assert settings.attachment_timeout_seconds == 30.0
+    assert settings.attachment_context_max_chars == 6000
+
+
 def test_skill_roots_parse_json_comma_and_newline(tmp_path):
     first = tmp_path / "employees"
     second = tmp_path / "tasks"
@@ -185,6 +211,25 @@ def test_skill_roots_parse_json_comma_and_newline(tmp_path):
     assert newline_settings.skill_roots == [first, second]
 
 
+def test_phase_5_string_list_settings_parse_json_comma_and_newline():
+    first = "files.example.test"
+    second = "cdn.example.test"
+
+    json_settings = LingNengSettings.from_env(
+        {"LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": f'["{first}", "{second}"]'}
+    )
+    comma_settings = LingNengSettings.from_env(
+        {"LINGNENG_ATTACHMENT_ALLOWED_HOSTS": f"{first},{second}"}
+    )
+    newline_settings = LingNengSettings.from_env(
+        {"LINGNENG_ATTACHMENT_ALLOWED_HOSTS": f"{first}\n{second}"}
+    )
+
+    assert json_settings.artifact_url_allowed_hosts == [first, second]
+    assert comma_settings.attachment_allowed_hosts == [first, second]
+    assert newline_settings.attachment_allowed_hosts == [first, second]
+
+
 def test_ready_summary_hides_rag_api_key(tmp_path):
     settings = LingNengSettings.from_env(
         {
@@ -203,6 +248,25 @@ def test_ready_summary_hides_rag_api_key(tmp_path):
     assert "secret-rag-key" not in repr(summary)
 
 
+def test_ready_summary_reports_phase_5_non_secret_counts(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_APP_ENV": "test",
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_INTERNAL_API_KEY": "key",
+            "LINGNENG_ARTIFACT_URL_ALLOWED_HOSTS": "files.example.test",
+            "LINGNENG_ATTACHMENT_ALLOWED_HOSTS": "files.example.test,cdn.example.test",
+        }
+    )
+
+    summary = settings.ready_summary()
+
+    assert summary["artifact_url_allow_list_count"] == 1
+    assert summary["attachment_host_allow_list_count"] == 2
+    assert "api_key" not in summary
+    assert "secret" not in repr(summary).lower()
+
+
 @pytest.mark.parametrize(
     ("env_name", "invalid_value"),
     [
@@ -215,6 +279,30 @@ def test_ready_summary_hides_rag_api_key(tmp_path):
     ],
 )
 def test_skill_and_rag_settings_reject_values_below_spec_minimums(
+    env_name, invalid_value
+):
+    with pytest.raises(ValidationError):
+        LingNengSettings.from_env({env_name: invalid_value})
+
+
+@pytest.mark.parametrize(
+    ("env_name", "invalid_value"),
+    [
+        ("LINGNENG_TOOL_RESULT_MAX_CHARS", "499"),
+        ("LINGNENG_DOCUMENT_MAX_CONTENT_CHARS", "999"),
+        ("LINGNENG_IMAGE_MAX_COUNT", "0"),
+        ("LINGNENG_GENERATION_TIMEOUT_SECONDS", "0.99"),
+        ("LINGNENG_WEB_SEARCH_DEFAULT_TOP_K", "0"),
+        ("LINGNENG_WEB_SEARCH_MAX_TOP_K", "0"),
+        ("LINGNENG_ATTACHMENT_MAX_FILES", "-1"),
+        ("LINGNENG_ATTACHMENT_MAX_TOTAL_BYTES", "-1"),
+        ("LINGNENG_ATTACHMENT_MAX_FILE_BYTES", "-1"),
+        ("LINGNENG_ATTACHMENT_MAX_IMAGE_BYTES", "-1"),
+        ("LINGNENG_ATTACHMENT_TIMEOUT_SECONDS", "0.09"),
+        ("LINGNENG_ATTACHMENT_CONTEXT_MAX_CHARS", "499"),
+    ],
+)
+def test_phase_5_settings_reject_values_below_spec_minimums(
     env_name, invalid_value
 ):
     with pytest.raises(ValidationError):

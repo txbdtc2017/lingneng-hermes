@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 
 class RunStatus(str, Enum):
     RUNNING = "running"
@@ -29,6 +31,7 @@ class RunRecord:
     answer: str | None
     error_code: str | None
     error_message: str | None
+    citations: list[dict[str, Any]]
     artifacts: list[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
@@ -59,10 +62,11 @@ class LingNengRunStore:
                     run_id,
                     status,
                     artifacts_json,
+                    citations_json,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_key, request_id) DO NOTHING
                 """,
                 (
@@ -70,6 +74,7 @@ class LingNengRunStore:
                     request_id,
                     run_id,
                     RunStatus.RUNNING.value,
+                    "[]",
                     "[]",
                     _to_db_time(now),
                     _to_db_time(now),
@@ -94,6 +99,7 @@ class LingNengRunStore:
         run_id: str,
         answer: str,
         artifacts: list[dict[str, Any]] | None = None,
+        citations: list[Any] | None = None,
     ) -> None:
         now = _now()
         with self._connect() as conn:
@@ -105,6 +111,7 @@ class LingNengRunStore:
                     error_code = NULL,
                     error_message = NULL,
                     artifacts_json = ?,
+                    citations_json = ?,
                     updated_at = ?,
                     completed_at = ?
                 WHERE run_id = ?
@@ -113,7 +120,8 @@ class LingNengRunStore:
                 (
                     RunStatus.SUCCEEDED.value,
                     answer,
-                    json.dumps(artifacts or [], ensure_ascii=False),
+                    _dump_json_list(artifacts),
+                    _dump_json_list(citations),
                     _to_db_time(now),
                     _to_db_time(now),
                     run_id,
@@ -134,6 +142,7 @@ class LingNengRunStore:
                     error_code = ?,
                     error_message = ?,
                     artifacts_json = ?,
+                    citations_json = ?,
                     updated_at = ?,
                     completed_at = ?
                 WHERE run_id = ?
@@ -143,6 +152,7 @@ class LingNengRunStore:
                     RunStatus.FAILED.value,
                     error_code,
                     error_message,
+                    "[]",
                     "[]",
                     _to_db_time(now),
                     _to_db_time(now),
@@ -204,6 +214,7 @@ class LingNengRunStore:
                     error_code TEXT,
                     error_message TEXT,
                     artifacts_json TEXT NOT NULL DEFAULT '[]',
+                    citations_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -211,6 +222,14 @@ class LingNengRunStore:
                 )
                 """
             )
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(lingneng_runs)")
+            }
+            if "citations_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE lingneng_runs "
+                    "ADD COLUMN citations_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def _raise_state_error(self, conn: sqlite3.Connection, run_id: str) -> None:
         row = conn.execute(
@@ -258,8 +277,33 @@ def _record_from_row(row: sqlite3.Row) -> RunRecord:
         answer=row["answer"],
         error_code=row["error_code"],
         error_message=row["error_message"],
-        artifacts=json.loads(row["artifacts_json"] or "[]"),
+        citations=_dict_list_from_json(row["citations_json"]),
+        artifacts=_dict_list_from_json(row["artifacts_json"]),
         created_at=_from_db_time(row["created_at"]),
         updated_at=_from_db_time(row["updated_at"]),
         completed_at=_from_optional_db_time(row["completed_at"]),
     )
+
+
+def _dump_json_list(value: list[Any] | None) -> str:
+    return json.dumps(_jsonable(value or []), ensure_ascii=False)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _dict_list_from_json(value: str | None) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]

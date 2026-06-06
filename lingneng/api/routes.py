@@ -16,8 +16,10 @@ from lingneng.runtime.agent_adapter import AgentRunAdapter
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    CitationDeltaEvent,
     ErrorEvent,
     FinalEvent,
+    RagContextEvent,
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -105,6 +107,7 @@ async def _replay_or_duplicate_stream(
                 run_id=record.run_id,
                 status="succeeded",
                 answer=answer,
+                citations=record.citations,
                 artifacts=record.artifacts,
             ),
         )
@@ -161,6 +164,7 @@ async def _adapter_stream(
                     event.run_id,
                     answer=event.answer,
                     artifacts=event.artifacts,
+                    citations=event.citations,
                 )
                 terminal_recorded = True
                 yield encode_sse("final", event)
@@ -226,12 +230,24 @@ def _resolve_chat_session_key(request: ChatStreamRequest) -> ResolvedSessionKey:
 
 
 def _event_name(
-    event: RunStartedEvent | AgentStepEvent | AnswerDeltaEvent | FinalEvent | ErrorEvent,
+    event: (
+        RunStartedEvent
+        | AgentStepEvent
+        | CitationDeltaEvent
+        | RagContextEvent
+        | AnswerDeltaEvent
+        | FinalEvent
+        | ErrorEvent
+    ),
 ) -> str:
     if isinstance(event, RunStartedEvent):
         return "run_started"
     if isinstance(event, AgentStepEvent):
         return "agent_step"
+    if isinstance(event, CitationDeltaEvent):
+        return "citation_delta"
+    if isinstance(event, RagContextEvent):
+        return "rag_context"
     if isinstance(event, AnswerDeltaEvent):
         return "answer_delta"
     if isinstance(event, FinalEvent):

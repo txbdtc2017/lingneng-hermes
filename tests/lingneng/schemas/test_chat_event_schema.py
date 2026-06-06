@@ -1,9 +1,12 @@
 from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
+    Citation,
+    CitationDeltaEvent,
     ErrorEvent,
     FINAL_STATUSES,
     FORMAL_EVENT_NAMES,
     FinalEvent,
+    RagContextEvent,
     RunStartedEvent,
 )
 
@@ -64,3 +67,27 @@ def test_phase_1_event_payloads_dump_without_event_field():
 
 def test_final_statuses_include_required_values():
     assert FINAL_STATUSES == {"succeeded", "degraded", "failed", "blocked"}
+
+
+def test_rag_event_payloads_dump_without_event_field():
+    citation = Citation(
+        document_id="doc-1",
+        source_file_id="file-1",
+        source_file_name="menu.pdf",
+        page_no=2,
+        section_title="套餐",
+        chunk_id="chunk-1",
+        score=0.9,
+    )
+    delta = CitationDeltaEvent.model_validate(citation.model_dump())
+    context = RagContextEvent(
+        context="套餐规则",
+        citations=[citation],
+        status="hit",
+        metadata={"selected_count": 1},
+    )
+
+    assert delta.model_dump()["chunk_id"] == "chunk-1"
+    assert context.model_dump()["status"] == "hit"
+    assert "event" not in delta.model_dump()
+    assert "event" not in context.model_dump()

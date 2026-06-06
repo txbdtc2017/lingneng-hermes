@@ -6,8 +6,10 @@ from typing import Protocol, Union
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    CitationDeltaEvent,
     ErrorEvent,
     FinalEvent,
+    RagContextEvent,
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -17,6 +19,8 @@ from lingneng.session.keys import ResolvedSessionKey
 LingNengStreamEvent = Union[
     RunStartedEvent,
     AgentStepEvent,
+    CitationDeltaEvent,
+    RagContextEvent,
     AnswerDeltaEvent,
     FinalEvent,
     ErrorEvent,

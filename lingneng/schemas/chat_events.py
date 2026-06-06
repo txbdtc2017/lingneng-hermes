@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,11 +51,32 @@ class AgentStepEvent(LingNengEventModel):
     refs: list[dict] = Field(default_factory=list)
 
 
+class Citation(LingNengEventModel):
+    document_id: str
+    source_file_id: str
+    source_file_name: str
+    page_no: int | None = None
+    section_title: str | None = None
+    chunk_id: str
+    score: float = Field(ge=0)
+
+
+class CitationDeltaEvent(Citation):
+    pass
+
+
+class RagContextEvent(LingNengEventModel):
+    context: str
+    citations: list[Citation] = Field(default_factory=list)
+    status: Literal["hit", "empty", "failed"]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class FinalEvent(LingNengEventModel):
     run_id: str
     status: FinalStatus
     answer: str
-    citations: list[dict] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
     artifacts: list[dict] = Field(default_factory=list)
 
 

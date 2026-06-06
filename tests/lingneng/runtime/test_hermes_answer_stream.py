@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -9,8 +10,10 @@ from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    CitationDeltaEvent,
     ErrorEvent,
     FinalEvent,
+    RagContextEvent,
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -87,6 +90,43 @@ class ToolProgressAgent:
         return {"final_response": "完成", "messages": []}
 
 
+class RagHitToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.tool_progress_callback(
+            "tool.completed",
+            "retrieve_rag",
+            None,
+            None,
+            duration=0.25,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": True,
+                    "tool_name": "retrieve_rag",
+                    "status": "hit",
+                    "context": "套餐规则",
+                    "citations": [
+                        {
+                            "document_id": "doc-1",
+                            "source_file_id": "file-1",
+                            "source_file_name": "menu.pdf",
+                            "page_no": 2,
+                            "section_title": "套餐",
+                            "chunk_id": "chunk-1",
+                            "score": 0.9,
+                        }
+                    ],
+                    "metadata": {"selected_count": 1},
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return {"final_response": "完成", "messages": []}
+
+
 class ConcurrentToolProgressAgent:
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -124,6 +164,13 @@ class ConcurrentToolProgressAgent:
 
 def request_and_session():
     request = ChatStreamRequest.model_validate(full_payload())
+    return request, resolve_session_key(request)
+
+
+def request_and_session_with_rag_context():
+    payload = full_payload()
+    payload["stream_options"]["include_rag_context"] = True
+    request = ChatStreamRequest.model_validate(payload)
     return request, resolve_session_key(request)
 
 
@@ -211,6 +258,25 @@ async def test_tool_progress_callback_becomes_agent_step_events(tmp_path):
     assert agent_steps[1].summary == "Duration: 0.25s"
     assert isinstance(events[-1], FinalEvent)
     assert events[-1].answer == "完成"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_rag_completion_emits_rag_events_and_final_citations(tmp_path):
+    request, resolved = request_and_session_with_rag_context()
+    adapter = HermesAgentRunAdapter(settings(tmp_path), agent_cls=RagHitToolProgressAgent)
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert [type(event) for event in events[1:4]] == [
+        AgentStepEvent,
+        CitationDeltaEvent,
+        RagContextEvent,
+    ]
+    assert events[1].status == "succeeded"
+    assert events[2].chunk_id == "chunk-1"
+    assert events[3].status == "hit"
+    assert isinstance(events[-1], FinalEvent)
+    assert events[-1].model_dump()["citations"][0]["chunk_id"] == "chunk-1"
 
 
 @pytest.mark.asyncio

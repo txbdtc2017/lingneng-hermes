@@ -104,6 +104,37 @@ class CountingEmptySuccessAdapter:
         yield FinalEvent(run_id=run_id, status="succeeded", answer="")
 
 
+class CountingCitationSuccessAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[RunStartedEvent | AnswerDeltaEvent | FinalEvent]:
+        self.calls += 1
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield AnswerDeltaEvent(text="完成", sequence=1)
+        yield FinalEvent(
+            run_id=run_id,
+            status="succeeded",
+            answer="完成",
+            citations=[
+                {
+                    "document_id": "doc-1",
+                    "source_file_id": "file-1",
+                    "source_file_name": "menu.pdf",
+                    "page_no": 2,
+                    "section_title": "套餐",
+                    "chunk_id": "chunk-1",
+                    "score": 0.9,
+                }
+            ],
+        )
+
+
 def post(client: TestClient, payload: dict):
     return client.post(
         "/internal/agent/chat/stream",
@@ -149,6 +180,23 @@ def test_repeated_empty_success_replays_empty_answer_delta(tmp_path):
     assert frames[1][1]["sequence"] == 1
     assert frames[2][1]["status"] == "succeeded"
     assert frames[2][1]["answer"] == ""
+    assert adapter.calls == 1
+
+
+def test_repeated_success_replays_final_citations(tmp_path):
+    adapter = CountingCitationSuccessAdapter()
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    app = create_app(settings=settings(tmp_path), adapter=adapter, run_store=store)
+    client = TestClient(app)
+
+    first = post(client, full_payload())
+    second = post(client, full_payload())
+    frames = parse_sse(second.text)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [event for event, _ in frames] == ["run_started", "answer_delta", "final"]
+    assert frames[-1][1]["citations"][0]["chunk_id"] == "chunk-1"
     assert adapter.calls == 1
 
 

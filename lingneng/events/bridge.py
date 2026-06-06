@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from pydantic import ValidationError
 
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    Citation,
+    CitationDeltaEvent,
     FinalEvent,
+    RagContextEvent,
     RunStartedEvent,
+)
+
+
+RagBridgeEvent = CitationDeltaEvent | RagContextEvent
+_RAG_TOOL_NAME = "retrieve_rag"
+_PUBLIC_TEXT_BLOCKLIST = (
+    "api_key",
+    "secret",
+    "token",
+    "traceback",
+    "exception",
 )
 
 
@@ -98,5 +115,151 @@ def agent_step_skipped(
     )
 
 
-def final_answer(run_id: str, answer: str) -> FinalEvent:
-    return FinalEvent(run_id=run_id, status="succeeded", answer=answer)
+def rag_events_from_tool_result(
+    *,
+    tool_name: str,
+    result: Any,
+    include_citations: bool,
+    include_rag_context: bool,
+) -> tuple[list[RagBridgeEvent], list[dict[str, Any]]]:
+    if tool_name != _RAG_TOOL_NAME:
+        return [], []
+
+    payload = _parse_tool_result(result)
+    if payload is None:
+        return [], []
+    if not _is_rag_result_payload(payload):
+        return [], []
+
+    valid_citations = _valid_citations(payload.get("citations"))
+    events: list[RagBridgeEvent] = []
+    if include_citations:
+        events.extend(
+            CitationDeltaEvent.model_validate(citation.model_dump())
+            for citation in valid_citations
+        )
+
+    if include_rag_context:
+        events.append(
+            RagContextEvent(
+                context=_rag_context_text(payload),
+                citations=valid_citations,
+                status=_rag_status(payload.get("status"), valid_citations),
+                metadata=_rag_metadata(payload.get("metadata")),
+            )
+        )
+
+    citations = [citation.model_dump(mode="json") for citation in valid_citations]
+    return events, citations if include_citations else []
+
+
+def dedupe_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for citation in citations:
+        chunk_id = citation.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id:
+            continue
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        deduped.append(citation)
+    return deduped
+
+
+def final_answer(
+    run_id: str,
+    answer: str,
+    citations: list[dict[str, Any]] | None = None,
+) -> FinalEvent:
+    return FinalEvent(
+        run_id=run_id,
+        status="succeeded",
+        answer=answer,
+        citations=citations or [],
+    )
+
+
+def _parse_tool_result(result: Any) -> dict[str, Any] | None:
+    if isinstance(result, dict):
+        return result
+    if not isinstance(result, str):
+        return None
+    try:
+        parsed = json.loads(result)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _is_rag_result_payload(payload: dict[str, Any]) -> bool:
+    payload_tool_name = payload.get("tool_name")
+    if payload_tool_name is not None and payload_tool_name != _RAG_TOOL_NAME:
+        return False
+    return any(
+        key in payload
+        for key in (
+            "status",
+            "context",
+            "citations",
+            "metadata",
+            "code",
+            "message",
+        )
+    )
+
+
+def _valid_citations(value: Any) -> list[Citation]:
+    if not isinstance(value, list):
+        return []
+    citations: list[Citation] = []
+    for item in value:
+        try:
+            citations.append(Citation.model_validate(item))
+        except ValidationError:
+            continue
+    return citations
+
+
+def _rag_status(value: Any, citations: list[Citation]) -> str:
+    if value in {"hit", "empty", "failed"}:
+        return value
+    return "hit" if citations else "empty"
+
+
+def _rag_context_text(payload: dict[str, Any]) -> str:
+    context = payload.get("context")
+    if isinstance(context, str) and _is_public_text(context):
+        return context
+    message = payload.get("message")
+    if payload.get("status") == "failed" and isinstance(message, str):
+        return message if _is_public_text(message) else ""
+    return ""
+
+
+def _rag_metadata(value: Any) -> dict[str, Any]:
+    sanitized = _sanitize_public_value(value)
+    return sanitized if isinstance(sanitized, dict) else {}
+
+
+def _is_public_text(value: str) -> bool:
+    lowered = value.lower()
+    return not any(part in lowered for part in _PUBLIC_TEXT_BLOCKLIST)
+
+
+def _sanitize_public_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_public_value(item)
+            for key, item in value.items()
+            if _is_public_text(str(key))
+        }
+    if isinstance(value, list | tuple):
+        return [_sanitize_public_value(item) for item in value]
+    if isinstance(value, str):
+        return value if _is_public_text(value) else ""
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    return None

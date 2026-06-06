@@ -18,7 +18,9 @@ from lingneng.events.bridge import (
     agent_step_skipped,
     agent_step_started,
     answer_delta,
+    dedupe_citations,
     final_answer,
+    rag_events_from_tool_result,
     run_started,
 )
 from lingneng.runtime.agent_adapter import LingNengStreamEvent
@@ -27,6 +29,11 @@ from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.hermes_session import LingNengHermesSessionStore
 from lingneng.session.keys import ResolvedSessionKey
 from lingneng.skills.loader import LingNengSkillLoader
+from lingneng.tools.rag import (
+    HttpRagProvider,
+    build_rag_request_context,
+    rag_request_context,
+)
 
 
 _KANBAN_ENV_KEYS = (
@@ -110,13 +117,14 @@ class HermesAgentRunAdapter:
     ) -> AsyncIterator[LingNengStreamEvent]:
         yield run_started(run_id=run_id, request_id=request.request_id)
 
-        queue: asyncio.Queue[AgentStepEvent | AnswerDeltaEvent | _ThreadResult]
+        queue: asyncio.Queue[LingNengStreamEvent | _ThreadResult]
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         sequence = 0
         tool_sequence = 0
         tool_progress_lock = threading.Lock()
         streamed_text: list[str] = []
+        rag_citations: list[dict[str, Any]] = []
 
         def on_delta(text: str | None) -> None:
             nonlocal sequence
@@ -138,6 +146,7 @@ class HermesAgentRunAdapter:
         ) -> None:
             nonlocal tool_sequence
             with tool_progress_lock:
+                events: list[LingNengStreamEvent]
                 if event_name == "tool.started":
                     tool_sequence += 1
                     event = agent_step_started(
@@ -145,6 +154,7 @@ class HermesAgentRunAdapter:
                         tool_name=tool_name,
                         preview=preview,
                     )
+                    events = [event]
                 elif event_name == "tool.completed":
                     tool_sequence += 1
                     event = agent_step_completed(
@@ -154,6 +164,17 @@ class HermesAgentRunAdapter:
                         is_error=bool(kwargs.get("is_error")),
                         result=kwargs.get("result"),
                     )
+                    rag_events, citations = rag_events_from_tool_result(
+                        tool_name=tool_name,
+                        result=kwargs.get("result"),
+                        include_citations=request.stream_options.include_citations,
+                        include_rag_context=request.stream_options.include_rag_context,
+                    )
+                    if citations:
+                        rag_citations[:] = dedupe_citations(
+                            [*rag_citations, *citations]
+                        )
+                    events = [event, *rag_events]
                 elif event_name in {"tool.skipped", "tool.blocked"}:
                     tool_sequence += 1
                     event = agent_step_skipped(
@@ -161,9 +182,11 @@ class HermesAgentRunAdapter:
                         tool_name=tool_name,
                         reason=kwargs.get("reason"),
                     )
+                    events = [event]
                 else:
                     return
-                loop.call_soon_threadsafe(queue.put_nowait, event)
+                for event in events:
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
 
         def run_agent() -> _ThreadResult:
             try:
@@ -177,13 +200,22 @@ class HermesAgentRunAdapter:
                         tool_progress_callback=on_tool_progress,
                     )
                     self._last_agent_for_tests = agent
-                    result = agent.run_conversation(
-                        request.query.content,
-                        system_message=self._build_system_message(request),
-                        conversation_history=history,
-                        task_id=run_id,
-                        persist_user_message=request.query.content,
+                    rag_context = build_rag_request_context(
+                        settings=self.settings,
+                        request=request,
+                        resolved_session=resolved_session,
                     )
+                    with rag_request_context(
+                        rag_context,
+                        provider=_build_rag_provider(self.settings),
+                    ):
+                        result = agent.run_conversation(
+                            request.query.content,
+                            system_message=self._build_system_message(request),
+                            conversation_history=history,
+                            task_id=run_id,
+                            persist_user_message=request.query.content,
+                        )
                 return _ThreadResult(
                     final_response=_final_response_from_result(result)
                 )
@@ -202,7 +234,15 @@ class HermesAgentRunAdapter:
                 if not streamed_text:
                     sequence += 1
                     yield answer_delta(text=final_text, sequence=sequence)
-                yield final_answer(run_id=run_id, answer=final_text)
+                yield final_answer(
+                    run_id=run_id,
+                    answer=final_text,
+                    citations=(
+                        rag_citations
+                        if request.stream_options.include_citations
+                        else []
+                    ),
+                )
                 return
 
             try:
@@ -247,6 +287,12 @@ def _final_response_from_result(result: Any) -> str:
         value = result.get("final_response")
         return value if isinstance(value, str) else ""
     return ""
+
+
+def _build_rag_provider(settings: LingNengSettings) -> HttpRagProvider | None:
+    if not settings.rag_endpoint.strip():
+        return None
+    return HttpRagProvider(settings)
 
 
 def _public_runtime_error(run_id: str, request_id: str) -> ErrorEvent:

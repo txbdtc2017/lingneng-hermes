@@ -61,9 +61,11 @@ def test_artifact_sanitizer_strips_unsafe_urls(url):
     "url",
     [
         "https://files.example.test/%2e%2e/report.pdf",
+        "https://files.example.test/%252e%252e/report.pdf",
         "https://files.example.test/../report.pdf",
         "https://files.example.test//Users/rotas/report.pdf",
         "https://files.example.test/%2FUsers%2Frotas%2Freport.pdf",
+        "https://files.example.test/reports/%5cUsers%5crotas%5creport.pdf",
     ],
 )
 def test_artifact_sanitizer_strips_unsafe_url_paths(url):

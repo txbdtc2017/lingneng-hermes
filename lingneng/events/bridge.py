@@ -18,7 +18,7 @@ from lingneng.schemas.chat_events import (
 
 RagBridgeEvent = CitationDeltaEvent | RagContextEvent
 _RAG_TOOL_NAME = "retrieve_rag"
-_PUBLIC_TEXT_BLOCKLIST = (
+_PUBLIC_CONTEXT_TEXT_BLOCKLIST = (
     "api_key",
     "secret",
     "token",
@@ -28,7 +28,16 @@ _PUBLIC_TEXT_BLOCKLIST = (
     "exception",
 )
 _METADATA_KEY_BLOCKLIST = (
-    *_PUBLIC_TEXT_BLOCKLIST,
+    *_PUBLIC_CONTEXT_TEXT_BLOCKLIST,
+    "request",
+    "payload",
+    "query",
+    "args",
+    "history",
+    "input",
+)
+_METADATA_TEXT_BLOCKLIST = (
+    *_PUBLIC_CONTEXT_TEXT_BLOCKLIST,
     "request",
     "payload",
     "query",
@@ -260,7 +269,7 @@ def _rag_metadata(value: Any) -> dict[str, Any]:
 
 def _is_public_text(value: str) -> bool:
     lowered = value.lower()
-    return not any(part in lowered for part in _PUBLIC_TEXT_BLOCKLIST)
+    return not any(part in lowered for part in _PUBLIC_CONTEXT_TEXT_BLOCKLIST)
 
 
 def _is_failure_result(payload: dict[str, Any]) -> bool:
@@ -281,7 +290,7 @@ def _sanitize_public_value(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_sanitize_public_value(item) for item in value]
     if isinstance(value, str):
-        return value if _is_public_text(value) else ""
+        return value if _is_public_metadata_text(value) else ""
     if value is None or isinstance(value, bool | int | float):
         return value
     return None
@@ -290,3 +299,8 @@ def _sanitize_public_value(value: Any) -> Any:
 def _is_public_metadata_key(value: str) -> bool:
     lowered = value.lower()
     return not any(part in lowered for part in _METADATA_KEY_BLOCKLIST)
+
+
+def _is_public_metadata_text(value: str) -> bool:
+    lowered = value.lower()
+    return not any(part in lowered for part in _METADATA_TEXT_BLOCKLIST)

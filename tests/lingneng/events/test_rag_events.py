@@ -189,6 +189,28 @@ def test_rag_context_metadata_strips_request_and_authorization_details():
     assert citations == [CITATION]
 
 
+def test_rag_context_metadata_strips_input_shaped_string_values():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            metadata={
+                "notes": ["raw request query input: USER PRIVATE INPUT"],
+                "selected_count": 1,
+            }
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert events[1].metadata == {"notes": [""], "selected_count": 1}
+    assert "USER PRIVATE INPUT" not in json.dumps(
+        events[1].metadata,
+        ensure_ascii=False,
+    )
+    assert citations == [CITATION]
+
+
 def test_failure_shaped_result_without_status_emits_failed_context():
     events, citations = rag_events_from_tool_result(
         tool_name="retrieve_rag",

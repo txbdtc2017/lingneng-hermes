@@ -89,6 +89,21 @@ class CountingFailureAdapter:
         )
 
 
+class CountingEmptySuccessAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[RunStartedEvent | FinalEvent]:
+        self.calls += 1
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield FinalEvent(run_id=run_id, status="succeeded", answer="")
+
+
 def post(client: TestClient, payload: dict):
     return client.post(
         "/internal/agent/chat/stream",
@@ -114,6 +129,26 @@ def test_repeated_success_replays_stored_sse_without_adapter(tmp_path):
     assert frames[2][1]["status"] == "succeeded"
     assert frames[2][1]["answer"] == "完成"
     assert frames[2][1]["artifacts"] == [{"artifact_id": "a-1"}]
+    assert adapter.calls == 1
+
+
+def test_repeated_empty_success_replays_empty_answer_delta(tmp_path):
+    adapter = CountingEmptySuccessAdapter()
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    app = create_app(settings=settings(tmp_path), adapter=adapter, run_store=store)
+    client = TestClient(app)
+
+    first = post(client, full_payload())
+    second = post(client, full_payload())
+    frames = parse_sse(second.text)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [event for event, _ in frames] == ["run_started", "answer_delta", "final"]
+    assert frames[1][1]["text"] == ""
+    assert frames[1][1]["sequence"] == 1
+    assert frames[2][1]["status"] == "succeeded"
+    assert frames[2][1]["answer"] == ""
     assert adapter.calls == 1
 
 

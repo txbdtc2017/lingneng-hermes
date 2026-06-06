@@ -1,5 +1,7 @@
+import asyncio
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -167,6 +169,56 @@ class SideEffectingActivityAgent:
         return {"final_response": "完成", "messages": []}
 
 
+class ConcurrentKanbanEnvAgent:
+    lock = threading.Lock()
+    calls = 0
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    check_second = threading.Event()
+    second_seen_after_first: str | None = "unset"
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls.lock:
+            cls.calls = 0
+        cls.first_started = threading.Event()
+        cls.release_first = threading.Event()
+        cls.second_started = threading.Event()
+        cls.check_second = threading.Event()
+        cls.second_seen_after_first = "unset"
+
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        import os
+
+        with self.lock:
+            type(self).calls += 1
+            call_index = type(self).calls
+
+        if call_index == 1:
+            type(self).first_started.set()
+            if not type(self).release_first.wait(timeout=5):
+                raise AssertionError("first run was not released")
+            return {"final_response": "first", "messages": []}
+
+        type(self).second_started.set()
+        if not type(self).check_second.wait(timeout=5):
+            raise AssertionError("second run was not checked")
+        type(self).second_seen_after_first = os.environ.get("HERMES_KANBAN_TASK")
+        return {"final_response": "second", "messages": []}
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_constructs_agent_with_no_tool_lingneng_context(
     tmp_path,
@@ -266,6 +318,57 @@ async def test_hermes_adapter_clears_kanban_worker_env_during_agent_run(
 
     assert KanbanEnvProbeAgent.seen_in_init is None
     assert KanbanEnvProbeAgent.seen_in_run is None
+    assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_serializes_kanban_env_isolation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    ConcurrentKanbanEnvAgent.reset()
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    first_runtime_dir = tmp_path / "first"
+    second_runtime_dir = tmp_path / "second"
+    first_runtime_dir.mkdir()
+    second_runtime_dir.mkdir()
+    first_adapter = HermesAgentRunAdapter(
+        settings=settings(first_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentKanbanEnvAgent,
+    )
+    second_adapter = HermesAgentRunAdapter(
+        settings=settings(second_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentKanbanEnvAgent,
+    )
+
+    async def collect(adapter, run_id):
+        return [event async for event in adapter.stream(request, resolved, run_id)]
+
+    first_task = asyncio.create_task(collect(first_adapter, "run-1"))
+    assert await asyncio.to_thread(
+        ConcurrentKanbanEnvAgent.first_started.wait,
+        5,
+    )
+
+    second_task = asyncio.create_task(collect(second_adapter, "run-2"))
+    second_entered_before_release = await asyncio.to_thread(
+        ConcurrentKanbanEnvAgent.second_started.wait,
+        0.5,
+    )
+    assert second_entered_before_release is False
+    ConcurrentKanbanEnvAgent.release_first.set()
+    await first_task
+    assert await asyncio.to_thread(
+        ConcurrentKanbanEnvAgent.second_started.wait,
+        5,
+    )
+
+    ConcurrentKanbanEnvAgent.check_second.set()
+    await second_task
+
+    assert ConcurrentKanbanEnvAgent.second_seen_after_first is None
     assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
 
 

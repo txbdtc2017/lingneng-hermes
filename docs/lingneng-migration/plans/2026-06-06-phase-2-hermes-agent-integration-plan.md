@@ -52,7 +52,10 @@ No additional user confirmation is required before Phase 2 execution. The Phase
   Hermes can inject when `HERMES_KANBAN_TASK` is present.
 - The Hermes adapter clears inherited `HERMES_KANBAN_*` worker environment
   variables while constructing `AIAgent` and while executing
-  `run_conversation()`, then restores the original values after the run.
+  `run_conversation()`, then restores the original values after the run. The
+  lock covers the full LingNeng Hermes construction/run context because
+  `os.environ` is process-global and concurrent restore can otherwise leak
+  `HERMES_KANBAN_TASK` into another run.
 - The Hermes adapter installs a LingNeng-only instance `_touch_activity`
   tracker so kanban heartbeat side effects do not run during Java API
   no-tool requests.
@@ -734,7 +737,9 @@ key or run store tests.
 Run the reload commands from Task 2.1 Step 1. Confirm `enabled_toolsets=[]`
 plus `disabled_toolsets=["kanban"]` is the accepted Phase 2 no-tool boundary,
 and confirm the final review requirement to isolate inherited
-`HERMES_KANBAN_*` worker environment and kanban heartbeat side effects.
+`HERMES_KANBAN_*` worker environment and kanban heartbeat side effects. The
+env-isolation lock must cover the full LingNeng Hermes construction/run
+context.
 
 - [ ] **Step 2: Extend failing adapter construction tests**
 
@@ -897,6 +902,88 @@ async def test_hermes_adapter_clears_kanban_worker_env_during_agent_run(
     assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
 
 
+class ConcurrentKanbanEnvAgent:
+    lock = threading.Lock()
+    calls = 0
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    check_second = threading.Event()
+    second_seen_after_first: str | None = "unset"
+
+    @classmethod
+    def reset(cls) -> None:
+        with cls.lock:
+            cls.calls = 0
+        cls.first_started = threading.Event()
+        cls.release_first = threading.Event()
+        cls.second_started = threading.Event()
+        cls.check_second = threading.Event()
+        cls.second_seen_after_first = "unset"
+
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        import os
+
+        with self.lock:
+            type(self).calls += 1
+            call_index = type(self).calls
+
+        if call_index == 1:
+            type(self).first_started.set()
+            if not type(self).release_first.wait(timeout=5):
+                raise AssertionError("first run was not released")
+            return {"final_response": "first", "messages": []}
+
+        type(self).second_started.set()
+        if not type(self).check_second.wait(timeout=5):
+            raise AssertionError("second run was not checked")
+        type(self).second_seen_after_first = os.environ.get("HERMES_KANBAN_TASK")
+        return {"final_response": "second", "messages": []}
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_serializes_kanban_env_isolation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-001")
+    ConcurrentKanbanEnvAgent.reset()
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    first_runtime_dir = tmp_path / "first"
+    second_runtime_dir = tmp_path / "second"
+    first_runtime_dir.mkdir()
+    second_runtime_dir.mkdir()
+    first_adapter = HermesAgentRunAdapter(
+        settings=settings(first_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentKanbanEnvAgent,
+    )
+    second_adapter = HermesAgentRunAdapter(
+        settings=settings(second_runtime_dir, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ConcurrentKanbanEnvAgent,
+    )
+
+    async def collect(adapter, run_id):
+        return [event async for event in adapter.stream(request, resolved, run_id)]
+
+    first_task = asyncio.create_task(collect(first_adapter, "run-1"))
+    assert await asyncio.to_thread(ConcurrentKanbanEnvAgent.first_started.wait, 5)
+    second_task = asyncio.create_task(collect(second_adapter, "run-2"))
+    second_entered_before_release = await asyncio.to_thread(
+        ConcurrentKanbanEnvAgent.second_started.wait,
+        0.5,
+    )
+    assert second_entered_before_release is False
+    ConcurrentKanbanEnvAgent.release_first.set()
+    await first_task
+    assert await asyncio.to_thread(ConcurrentKanbanEnvAgent.second_started.wait, 5)
+    ConcurrentKanbanEnvAgent.check_second.set()
+    await second_task
+
+    assert ConcurrentKanbanEnvAgent.second_seen_after_first is None
+    assert __import__("os").environ["HERMES_KANBAN_TASK"] == "task-001"
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_installs_lingneng_activity_tracker(tmp_path):
     request = ChatStreamRequest.model_validate(full_payload())
@@ -917,8 +1004,8 @@ Expected initial failure: adapter does not accept `settings` or `agent_cls`,
 does not construct `AIAgent`, has no test inspection hook, or does not strip
 env-injected kanban tools from the no-tool boundary. The final review
 regressions also fail until the adapter clears inherited `HERMES_KANBAN_*`
-variables during construction/run and replaces kanban heartbeat activity
-tracking with a LingNeng-local tracker.
+variables under a full-context lock during construction/run and replaces
+kanban heartbeat activity tracking with a LingNeng-local tracker.
 
 - [ ] **Step 3: Run focused test and confirm failure**
 
@@ -1256,7 +1343,7 @@ async def stream(...):
                 yield _public_runtime_error(run_id, request.request_id)
                 return
             final_text = result.final_response
-            if not streamed_text and final_text:
+            if not streamed_text:
                 sequence += 1
                 yield answer_delta(text=final_text, sequence=sequence)
             yield final_answer(run_id=run_id, answer=final_text)
@@ -1532,8 +1619,7 @@ async def _replay_or_duplicate_stream(
     if record.status is RunStatus.SUCCEEDED:
         answer = record.answer or ""
         yield encode_sse("run_started", RunStartedEvent(record.run_id, request_id))
-        if answer:
-            yield encode_sse("answer_delta", AnswerDeltaEvent(text=answer, sequence=1))
+        yield encode_sse("answer_delta", AnswerDeltaEvent(text=answer, sequence=1))
         yield encode_sse(
             "final",
             FinalEvent(
@@ -1773,16 +1859,19 @@ Phase 2 is complete only when:
 - `HermesAgentRunAdapter` constructs `AIAgent` with no tools and LingNeng
   SessionDB.
 - `HermesAgentRunAdapter` clears inherited `HERMES_KANBAN_*` worker environment
-  during construction/run and restores it afterward.
+  during construction/run with a lock covering the entire context and restores
+  it afterward.
 - `HermesAgentRunAdapter` installs a LingNeng-only activity tracker so kanban
   heartbeat side effects do not run.
 - Fake-mode imports do not load `hermes_state`, while
   `from lingneng.session import LingNengHermesSessionStore` still resolves.
 - Java `history` is not passed to `AIAgent` and not persisted into SessionDB.
 - Hermes deltas become ordered `answer_delta` SSE events.
-- Non-streaming Hermes final answers synthesize one `answer_delta`.
+- Non-streaming Hermes successful results synthesize one `answer_delta`, even
+  when the final answer is empty.
 - Completed success and failure duplicate requests replay stored terminal
-  output without invoking the adapter.
+  output without invoking the adapter; successful replay always emits one
+  `answer_delta`, even when the stored answer is empty.
 - Replayed requests do not append duplicate user messages.
 - Phase-level pytest, reference contract, ruff, diff, and incomplete-marker
   checks pass.

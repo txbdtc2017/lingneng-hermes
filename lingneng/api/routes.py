@@ -94,11 +94,10 @@ async def _replay_or_duplicate_stream(
             "run_started",
             RunStartedEvent(run_id=record.run_id, request_id=request_id),
         )
-        if answer:
-            yield encode_sse(
-                "answer_delta",
-                AnswerDeltaEvent(text=answer, sequence=1),
-            )
+        yield encode_sse(
+            "answer_delta",
+            AnswerDeltaEvent(text=answer, sequence=1),
+        )
         yield encode_sse(
             "final",
             FinalEvent(

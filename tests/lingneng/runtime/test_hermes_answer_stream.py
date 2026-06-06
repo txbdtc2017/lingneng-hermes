@@ -2,7 +2,12 @@ import pytest
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
-from lingneng.schemas.chat_events import AnswerDeltaEvent, ErrorEvent, FinalEvent
+from lingneng.schemas.chat_events import (
+    AnswerDeltaEvent,
+    ErrorEvent,
+    FinalEvent,
+    RunStartedEvent,
+)
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
@@ -35,6 +40,14 @@ class NonStreamingAgent:
 
     def run_conversation(self, *args, **kwargs):
         return {"final_response": "完成", "messages": []}
+
+
+class EmptyAnswerAgent:
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        return {"final_response": "", "messages": []}
 
 
 class FailingAgent:
@@ -80,6 +93,25 @@ async def test_final_answer_is_synthesized_as_delta_when_no_streaming_occurs(
     assert [delta.text for delta in deltas] == ["完成"]
     assert isinstance(final, FinalEvent)
     assert final.answer == "完成"
+
+
+@pytest.mark.asyncio
+async def test_empty_final_answer_synthesizes_empty_delta(tmp_path):
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(settings(tmp_path), agent_cls=EmptyAnswerAgent)
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert [type(event) for event in events] == [
+        RunStartedEvent,
+        AnswerDeltaEvent,
+        FinalEvent,
+    ]
+    delta = events[1]
+    final = events[2]
+    assert delta.text == ""
+    assert delta.sequence == 1
+    assert final.answer == ""
 
 
 @pytest.mark.asyncio

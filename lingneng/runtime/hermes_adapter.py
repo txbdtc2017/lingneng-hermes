@@ -39,10 +39,6 @@ class _ThreadResult:
 
 @contextlib.contextmanager
 def _without_kanban_worker_env():
-    if not any(os.environ.get(key) is not None for key in _KANBAN_ENV_KEYS):
-        yield
-        return
-
     with _KANBAN_ENV_LOCK:
         saved = {key: os.environ.get(key) for key in _KANBAN_ENV_KEYS}
         for key in _KANBAN_ENV_KEYS:
@@ -137,7 +133,7 @@ class HermesAgentRunAdapter:
                     yield _public_runtime_error(run_id, request.request_id)
                     return
                 final_text = result.final_response
-                if not streamed_text and final_text:
+                if not streamed_text:
                     sequence += 1
                     yield answer_delta(text=final_text, sequence=sequence)
                 yield final_answer(run_id=run_id, answer=final_text)

@@ -113,10 +113,12 @@ contract reference. Do not implement there.
   strips those env-injected tools from LingNeng no-tool runs.
 - The Hermes adapter must also clear inherited `HERMES_KANBAN_*` worker
   environment variables while constructing `AIAgent` and while executing
-  `run_conversation()`. The isolated keys include `HERMES_KANBAN_TASK`,
-  `HERMES_KANBAN_BOARD`, `HERMES_KANBAN_DB`, `HERMES_KANBAN_WORKSPACE`, and
-  `HERMES_KANBAN_WORKSPACES_ROOT`; original values must be restored after the
-  LingNeng run finishes.
+  `run_conversation()`. Because `os.environ` is process-global, the env
+  isolation lock must cover the entire LingNeng Hermes construction/run
+  context, even when no kanban env key is currently present. The isolated keys
+  include `HERMES_KANBAN_TASK`, `HERMES_KANBAN_BOARD`, `HERMES_KANBAN_DB`,
+  `HERMES_KANBAN_WORKSPACE`, and `HERMES_KANBAN_WORKSPACES_ROOT`; original
+  values must be restored after the LingNeng run finishes.
 - The Hermes adapter must install a LingNeng-only instance activity tracker on
   the constructed agent so `_touch_activity(desc)` updates
   `_last_activity_ts` and `_last_activity_desc` without calling the kanban
@@ -136,8 +138,9 @@ contract reference. Do not implement there.
   `error` event without invoking the adapter again.
 - Replayed successful requests emit a minimal deterministic sequence:
   `run_started`, one `answer_delta` containing the stored final answer, and
-  `final`. Fine-grained original delta replay remains out of scope unless it is
-  already stored by the run store.
+  `final`. The `answer_delta` is required even when the stored final answer is
+  an empty string. Fine-grained original delta replay remains out of scope
+  unless it is already stored by the run store.
 - Replayed failed requests emit a single terminal `error` event using the
   stored public error code and message.
 - Running duplicates still emit `REQUEST_ALREADY_RUNNING` and do not invoke the
@@ -216,9 +219,10 @@ The adapter must emit a LingNeng event stream:
 4. `ErrorEvent(run_id, request_id, code, message, trace_id, recoverable)` when
    Hermes raises or returns an unrecoverable error.
 
-If Hermes returns a final answer but no text deltas were delivered, the adapter
+If Hermes returns successfully but no text deltas were delivered, the adapter
 must synthesize one `answer_delta` containing the final answer before emitting
-`final`. This keeps Java's minimum event sequence stable.
+`final`, even when the final answer is an empty string. This keeps Java's
+minimum event sequence stable.
 
 If Hermes streams deltas and returns a final answer, the joined deltas should
 equal the final answer in contract tests that use the fake Hermes runner. The
@@ -442,8 +446,8 @@ Phase 2 is complete when:
 - `HermesAgentRunAdapter` uses explicit no-tool configuration and does not
   expose Hermes default tools or env-injected kanban worker tools.
 - `HermesAgentRunAdapter` clears inherited `HERMES_KANBAN_*` worker environment
-  variables during `AIAgent` construction and `run_conversation()`, then
-  restores the original environment values.
+  variables during `AIAgent` construction and `run_conversation()` under a lock
+  that covers the whole context, then restores the original environment values.
 - `HermesAgentRunAdapter` installs a LingNeng-only `_touch_activity` tracker so
   kanban heartbeat side effects do not run during LingNeng Java API requests.
 - `import lingneng.runtime` in fake mode does not load `hermes_state` or
@@ -456,15 +460,16 @@ Phase 2 is complete when:
 - Automated tests prove different employee identities produce different Hermes
   sessions for the same business `conversation_id`.
 - Hermes stream deltas are converted to ordered `answer_delta` events.
-- If Hermes does not stream deltas but returns a final answer, the adapter
-  synthesizes one `answer_delta`.
+- If Hermes does not stream deltas but returns successfully, the adapter
+  synthesizes one `answer_delta`, including for an empty final answer.
 - Joined deltas equal `final.answer` in the no-tool contract test.
 - Successful Hermes output marks the run as `succeeded` and stores final answer
   and artifacts in the run store.
 - Hermes exceptions after stream start mark the run as `failed`, emit one
   terminal public `error`, and do not leak raw exceptions.
 - Repeated completed successful `request_id` values replay stored SSE output
-  without invoking the adapter.
+  without invoking the adapter, including one `answer_delta` for empty stored
+  answers.
 - Repeated completed failed `request_id` values replay stored public error
   output without invoking the adapter.
 - Repeated running `request_id` values still return `REQUEST_ALREADY_RUNNING`

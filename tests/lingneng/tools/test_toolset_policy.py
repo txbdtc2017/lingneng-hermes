@@ -22,15 +22,24 @@ APPROVED_LINGNENG_TOOLS = {
     "document_generation",
     "image_generation",
     "chart_visualization",
+    "web_search",
     "read_workspace",
     "write_workspace",
 }
 
-STUB_ONLY_TOOLS = APPROVED_LINGNENG_TOOLS - {"retrieve_rag"}
+REAL_PHASE_5_TOOLS = {
+    "retrieve_rag",
+    "document_generation",
+    "image_generation",
+    "chart_visualization",
+    "web_search",
+}
+
+STUB_ONLY_TOOLS = APPROVED_LINGNENG_TOOLS - REAL_PHASE_5_TOOLS
 
 DISALLOWED_HERMES_TOOLS = {
     "terminal",
-    "web_search",
+    "web_extract",
     "process",
     "read_file",
     "write_file",
@@ -187,3 +196,13 @@ def test_retrieve_rag_registered_handler_is_not_phase_3_stub():
     assert result["success"] is False
     assert result["tool_name"] == "retrieve_rag"
     assert result.get("phase") != "phase_3_stub"
+
+
+def test_phase_5_real_handlers_are_not_phase_3_stubs_when_unconfigured():
+    for tool_name in REAL_PHASE_5_TOOLS - {"retrieve_rag"}:
+        result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
+
+        assert result["success"] is False
+        assert result["tool_name"] == tool_name
+        assert result["code"] == "NOT_CONFIGURED"
+        assert result.get("phase") != "phase_3_stub"

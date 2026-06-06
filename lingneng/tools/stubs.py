@@ -14,12 +14,21 @@ LINGNENG_TOOL_NAMES = (
     "document_generation",
     "image_generation",
     "chart_visualization",
+    "web_search",
     "read_workspace",
     "write_workspace",
 )
 
+REAL_TOOL_NAMES = (
+    "retrieve_rag",
+    "document_generation",
+    "image_generation",
+    "chart_visualization",
+    "web_search",
+)
+
 STUB_TOOL_NAMES = tuple(
-    tool_name for tool_name in LINGNENG_TOOL_NAMES if tool_name != "retrieve_rag"
+    tool_name for tool_name in LINGNENG_TOOL_NAMES if tool_name not in REAL_TOOL_NAMES
 )
 
 
@@ -98,34 +107,54 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "document_generation": _object_schema(
         "document_generation",
-        "Request LingNeng document generation. Phase 3 returns NOT_CONFIGURED.",
+        "Generate a LingNeng business document through the controlled provider.",
         {
+            "title": _string("Document title."),
             "instruction": _string("Document generation instruction."),
+            "content": _string("Bounded source content for the document."),
             "format": _string("Optional output format."),
+            "target_format": _string("Optional target output format."),
         },
         ("instruction",),
     ),
     "image_generation": _object_schema(
         "image_generation",
-        "Request LingNeng image generation. Phase 3 returns NOT_CONFIGURED.",
+        "Generate LingNeng business images through the controlled provider.",
         {
             "prompt": _string("Image prompt."),
+            "count": _integer("Number of images to generate.", minimum=1),
+            "size": _string("Optional image size, such as 1024x1024."),
+            "quality": _string("Optional image quality."),
             "style": _string("Optional visual style."),
         },
         ("prompt",),
     ),
     "chart_visualization": _object_schema(
         "chart_visualization",
-        "Request LingNeng chart generation. Phase 3 returns NOT_CONFIGURED.",
+        "Generate a LingNeng chart image through the controlled provider.",
         {
             "instruction": _string("Chart instruction."),
+            "title": _string("Optional chart title."),
+            "chart_type": _string("Optional chart type."),
             "data": {
                 "type": "object",
                 "description": "Optional chart data.",
                 "additionalProperties": True,
             },
+            "data_summary": _string("Optional bounded public chart data summary."),
         },
         ("instruction",),
+    ),
+    "web_search": _object_schema(
+        "web_search",
+        "Search the web through the controlled LingNeng search provider.",
+        {
+            "query": _string("Search query."),
+            "top_k": _integer("Maximum number of public sources to return.", minimum=1),
+            "recency_filter": _string("Optional recency filter."),
+            "site_filter": _string("Optional site or domain filter."),
+        },
+        ("query",),
     ),
     "read_workspace": _object_schema(
         "read_workspace",

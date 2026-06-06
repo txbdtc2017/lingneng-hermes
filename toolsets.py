@@ -237,6 +237,7 @@ TOOLSETS = {
             "document_generation",
             "image_generation",
             "chart_visualization",
+            "web_search",
             "read_workspace",
             "write_workspace",
         ],

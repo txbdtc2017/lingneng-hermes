@@ -1,0 +1,430 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from lingneng.config.settings import LingNengSettings
+from lingneng.tools.chart_visualization import (
+    ChartVisualizationResult,
+    chart_visualization_context,
+    chart_visualization_handler,
+)
+from lingneng.tools.document_generation import (
+    DocumentGenerationResult,
+    document_generation_context,
+    document_generation_handler,
+)
+from lingneng.tools.image_generation import (
+    ImageGenerationResult,
+    image_generation_context,
+    image_generation_handler,
+)
+from lingneng.tools.web_search import (
+    WebSearchResult,
+    web_search_context,
+    web_search_handler,
+)
+from tools.registry import registry
+
+
+DOC_ARTIFACT = {
+    "artifact_id": "artifact-doc-1",
+    "artifact_type": "document",
+    "source": "document_generation",
+    "file_name": "report.pdf",
+    "mime_type": "application/pdf",
+    "url": "https://files.example.test/report.pdf",
+    "object_key": "external/java-agent-file/artifact-doc-1",
+    "format": "pdf",
+    "target_format": "pdf",
+    "conversion_required": False,
+    "conversion_owner": None,
+}
+
+IMAGE_ARTIFACT = {
+    "artifact_id": "artifact-img-1",
+    "artifact_type": "image",
+    "source": "image_generation",
+    "file_name": "image.png",
+    "mime_type": "image/png",
+    "url": "https://files.example.test/image.png",
+    "object_key": "external/java-agent-file/artifact-img-1",
+    "format": "png",
+    "target_format": "png",
+    "conversion_required": False,
+    "conversion_owner": None,
+}
+
+CHART_ARTIFACT_WRONG_SOURCE = {
+    "artifact_id": "artifact-chart-1",
+    "artifact_type": "document",
+    "source": "image_generation",
+    "file_name": "chart.png",
+    "mime_type": "image/png",
+    "url": "https://files.example.test/chart.png",
+    "object_key": "external/java-agent-file/artifact-chart-1",
+    "format": "png",
+    "target_format": "png",
+    "conversion_required": False,
+    "conversion_owner": None,
+}
+
+
+def settings(tmp_path: Path) -> LingNengSettings:
+    return LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_DOCUMENT_MAX_CONTENT_CHARS": "1000",
+            "LINGNENG_IMAGE_MAX_COUNT": "2",
+            "LINGNENG_WEB_SEARCH_DEFAULT_TOP_K": "2",
+            "LINGNENG_WEB_SEARCH_MAX_TOP_K": "3",
+        }
+    )
+
+
+class FakeDocumentProvider:
+    def __init__(self) -> None:
+        self.request: Any = None
+
+    def generate(self, request: Any) -> DocumentGenerationResult:
+        self.request = request
+        return DocumentGenerationResult(
+            summary="PDF 文档生成完成",
+            artifacts=[DOC_ARTIFACT],
+            safe_output={"provider_job_id": "job-doc-1"},
+            metadata={"template": "default"},
+        )
+
+
+class FakeImageProvider:
+    def __init__(self, artifacts: list[dict[str, Any]] | None = None) -> None:
+        self.request: Any = None
+        self.artifacts = artifacts if artifacts is not None else [IMAGE_ARTIFACT]
+
+    def generate(self, request: Any) -> ImageGenerationResult:
+        self.request = request
+        return ImageGenerationResult(
+            summary="图片生成完成",
+            artifacts=self.artifacts,
+            safe_output={"provider_job_id": "job-image-1"},
+        )
+
+
+class FakeChartProvider:
+    def __init__(self) -> None:
+        self.request: Any = None
+
+    def generate(self, request: Any) -> ChartVisualizationResult:
+        self.request = request
+        return ChartVisualizationResult(
+            summary="图表生成完成",
+            artifacts=[CHART_ARTIFACT_WRONG_SOURCE],
+            metadata={"secret_token": "must-not-leak", "chart_rows": 2},
+        )
+
+
+class FakeWebSearchProvider:
+    def __init__(self) -> None:
+        self.request: Any = None
+
+    def search(self, request: Any) -> WebSearchResult:
+        self.request = request
+        return WebSearchResult(
+            summary="搜索完成",
+            sources=[
+                {
+                    "id": "src-1",
+                    "title": "Result A",
+                    "url": "https://example.com/a",
+                    "website": "example.com",
+                    "date": "2026-06-06",
+                    "snippet": "Public snippet",
+                    "api_key": "must-not-leak",
+                },
+                {
+                    "id": "src-credential",
+                    "title": "Credential URL",
+                    "url": "https://user:pass@example.com/secret",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "src-ftp",
+                    "title": "FTP URL",
+                    "url": "ftp://example.com/file",
+                    "website": "example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "src-whitespace",
+                    "title": "Whitespace Authority",
+                    "url": "https://exa mple.com/file",
+                    "website": "exa mple.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "src-control",
+                    "title": "Control URL",
+                    "url": "https://bad.example.com\x00/file",
+                    "website": "bad.example.com",
+                    "snippet": "drop",
+                },
+                {
+                    "id": "src-2",
+                    "title": "Result B",
+                    "url": "http://example.org/b",
+                    "website": "example.org",
+                    "date": None,
+                    "snippet": "Another public snippet",
+                    "metadata": {"token": "must-not-leak"},
+                },
+            ],
+            metadata={"raw_payload": "must-not-leak", "source_count": 6},
+        )
+
+
+class ExplodingProvider:
+    def generate(self, request: Any) -> Any:
+        del request
+        raise RuntimeError("traceback secret-token /Users/rotas/private")
+
+    def search(self, request: Any) -> Any:
+        del request
+        raise RuntimeError("traceback secret-token /Users/rotas/private")
+
+
+def test_document_generation_returns_artifact_metadata_and_bounded_request(tmp_path):
+    provider = FakeDocumentProvider()
+    content = "正文" + ("A" * 1200)
+
+    with document_generation_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            document_generation_handler(
+                {
+                    "title": "报告",
+                    "instruction": "生成 PDF",
+                    "content": content,
+                    "format": "pdf",
+                }
+            )
+        )
+
+    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert result["tool_name"] == "document_generation"
+    assert result["artifacts"][0]["artifact_id"] == "artifact-doc-1"
+    assert provider.request.title == "报告"
+    assert len(provider.request.content) == settings(tmp_path).document_max_content_chars
+    assert result["safe_output"]["artifact_count"] == 1
+    safe_dump = json.dumps(result["safe_output"], ensure_ascii=False)
+    assert content not in safe_dump
+    assert "正文" not in safe_dump
+
+
+def test_image_generation_clamps_count_to_settings(tmp_path):
+    provider = FakeImageProvider()
+
+    with image_generation_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            image_generation_handler(
+                {
+                    "prompt": "生成产品图",
+                    "count": 99,
+                    "size": "1024x1024",
+                    "quality": "high",
+                    "style": "realistic",
+                }
+            )
+        )
+
+    assert result["success"] is True
+    assert provider.request.count == settings(tmp_path).image_max_count
+    assert result["safe_output"]["requested_count"] == settings(tmp_path).image_max_count
+
+
+def test_image_generation_partial_success_returns_valid_artifacts(tmp_path):
+    invalid_artifact = {**IMAGE_ARTIFACT, "url": "file:///Users/rotas/private.png"}
+    provider = FakeImageProvider(artifacts=[invalid_artifact, IMAGE_ARTIFACT])
+
+    with image_generation_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            image_generation_handler({"prompt": "生成配图", "count": 2})
+        )
+
+    assert result["success"] is True
+    assert result["status"] == "succeeded"
+    assert [artifact["artifact_id"] for artifact in result["artifacts"]] == [
+        "artifact-img-1"
+    ]
+
+
+def test_chart_visualization_returns_image_artifact_with_chart_source(tmp_path):
+    provider = FakeChartProvider()
+
+    with chart_visualization_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            chart_visualization_handler(
+                {
+                    "instruction": "生成趋势图",
+                    "title": "收入趋势",
+                    "chart_type": "line",
+                    "data": {
+                        "rows": [
+                            {"month": "Jan", "revenue": 10},
+                            {"month": "Feb", "revenue": 20},
+                        ],
+                        "secret_token": "must-not-leak",
+                    },
+                }
+            )
+        )
+
+    assert result["success"] is True
+    assert result["artifacts"][0]["artifact_type"] == "image"
+    assert result["artifacts"][0]["source"] == "chart_visualization"
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert "secret_token" not in dumped
+    assert "must-not-leak" not in dumped
+
+
+def test_web_search_clamps_top_k_and_returns_public_sources_only(tmp_path):
+    provider = FakeWebSearchProvider()
+
+    with web_search_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            web_search_handler(
+                {
+                    "query": "灵能 AI 最新信息",
+                    "top_k": 99,
+                    "recency_filter": "week",
+                    "site_filter": "example.com",
+                }
+            )
+        )
+
+    assert result["success"] is True
+    assert result["tool_name"] == "web_search"
+    assert result["artifacts"] == []
+    assert provider.request.top_k == settings(tmp_path).web_search_max_top_k
+    assert result["safe_output"]["top_k"] == settings(tmp_path).web_search_max_top_k
+    sources = result["safe_output"]["sources"]
+    assert [source["url"] for source in sources] == [
+        "https://example.com/a",
+        "http://example.org/b",
+    ]
+    assert set(sources[0]) == {"id", "title", "url", "website", "date", "snippet"}
+    dumped = json.dumps(result, ensure_ascii=False).lower()
+    assert "user:pass" not in dumped
+    assert "ftp://" not in dumped
+    assert "exa mple.com" not in dumped
+    assert "\\u0000" not in dumped
+    assert "api_key" not in dumped
+    assert "token" not in dumped
+    assert "raw_payload" not in dumped
+
+
+def test_provider_exceptions_return_safe_public_failures(tmp_path):
+    provider = ExplodingProvider()
+    checks = [
+        (
+            document_generation_context,
+            document_generation_handler,
+            {"instruction": "生成报告"},
+            "DOCUMENT_GENERATION_PROVIDER_ERROR",
+        ),
+        (
+            image_generation_context,
+            image_generation_handler,
+            {"prompt": "生成图片"},
+            "IMAGE_GENERATION_PROVIDER_ERROR",
+        ),
+        (
+            chart_visualization_context,
+            chart_visualization_handler,
+            {"instruction": "生成图表"},
+            "CHART_VISUALIZATION_PROVIDER_ERROR",
+        ),
+        (
+            web_search_context,
+            web_search_handler,
+            {"query": "搜索"},
+            "WEB_SEARCH_PROVIDER_ERROR",
+        ),
+    ]
+
+    for context, handler, args, code in checks:
+        with context(settings(tmp_path), provider=provider):
+            result = json.loads(handler(args))
+
+        assert result["success"] is False
+        assert result["status"] == "failed"
+        assert result["code"] == code
+        assert result["artifacts"] == []
+        dumped = json.dumps(result, ensure_ascii=False).lower()
+        assert "traceback" not in dumped
+        assert "secret-token" not in dumped
+        assert "/users/rotas" not in dumped
+
+
+def test_missing_providers_return_real_not_configured_results(tmp_path):
+    checks = [
+        (document_generation_context, document_generation_handler, "document_generation"),
+        (image_generation_context, image_generation_handler, "image_generation"),
+        (chart_visualization_context, chart_visualization_handler, "chart_visualization"),
+        (web_search_context, web_search_handler, "web_search"),
+    ]
+
+    for context, handler, tool_name in checks:
+        with context(settings(tmp_path), provider=None):
+            result = json.loads(handler({"query": "hello", "prompt": "hello"}))
+
+        assert result["success"] is False
+        assert result["status"] == "skipped"
+        assert result["code"] == "NOT_CONFIGURED"
+        assert result["tool_name"] == tool_name
+        assert result["artifacts"] == []
+        assert result.get("phase") != "phase_3_stub"
+
+
+def test_registry_dispatch_web_search_uses_lingneng_controlled_handler(tmp_path):
+    provider = FakeWebSearchProvider()
+
+    import lingneng.tools.toolset  # noqa: F401
+
+    entry = registry.get_entry("web_search")
+    assert entry is not None
+    assert entry.toolset == "lingneng"
+    assert entry.handler.__module__ == "lingneng.tools.web_search"
+
+    with web_search_context(settings(tmp_path), provider=provider):
+        result = json.loads(registry.dispatch("web_search", {"query": "搜索"}))
+
+    assert result["tool_name"] == "web_search"
+    assert provider.request.query == "搜索"
+
+
+def test_lingneng_web_search_overrides_preexisting_hermes_web_search():
+    repo_root = Path(__file__).resolve().parents[3]
+    code = (
+        "import tools.web_tools\n"
+        "from tools.registry import registry\n"
+        "assert registry.get_entry('web_search').toolset == 'web'\n"
+        "import lingneng.tools.toolset\n"
+        "entry = registry.get_entry('web_search')\n"
+        "assert entry.toolset == 'lingneng'\n"
+        "assert entry.handler.__module__ == 'lingneng.tools.web_search'\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr

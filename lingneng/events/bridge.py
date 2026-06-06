@@ -8,16 +8,26 @@ from pydantic import ValidationError
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    ArtifactCreatedEvent,
     Citation,
     CitationDeltaEvent,
     FinalEvent,
     RagContextEvent,
     RunStartedEvent,
 )
+from lingneng.tools.artifacts import (
+    artifact_from_public_dict,
+    dedupe_artifacts as _dedupe_artifacts,
+)
 
 
 RagBridgeEvent = CitationDeltaEvent | RagContextEvent
 _RAG_TOOL_NAME = "retrieve_rag"
+_ARTIFACT_TOOL_NAMES = {
+    "document_generation",
+    "image_generation",
+    "chart_visualization",
+}
 _PUBLIC_CONTEXT_TEXT_BLOCKLIST = (
     "api_key",
     "secret",
@@ -188,16 +198,46 @@ def dedupe_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def artifact_events_from_tool_result(
+    *,
+    tool_name: str,
+    result: Any,
+) -> tuple[list[ArtifactCreatedEvent], list[dict[str, Any]]]:
+    if tool_name not in _ARTIFACT_TOOL_NAMES:
+        return [], []
+
+    payload = _parse_tool_result(result)
+    if payload is None:
+        return [], []
+
+    payload_tool_name = payload.get("tool_name")
+    if payload_tool_name is not None and payload_tool_name != tool_name:
+        return [], []
+
+    artifacts = _valid_artifact_dicts(payload.get("artifacts"))
+    events = [
+        ArtifactCreatedEvent.model_validate(artifact)
+        for artifact in artifacts
+    ]
+    return events, artifacts
+
+
+def dedupe_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _dedupe_artifacts(artifacts)
+
+
 def final_answer(
     run_id: str,
     answer: str,
     citations: list[dict[str, Any]] | None = None,
+    artifacts: list[dict[str, Any]] | None = None,
 ) -> FinalEvent:
     return FinalEvent(
         run_id=run_id,
         status="succeeded",
         answer=answer,
         citations=citations or [],
+        artifacts=_valid_artifact_dicts(artifacts or []),
     )
 
 
@@ -242,6 +282,25 @@ def _valid_citations(value: Any) -> list[Citation]:
         except ValidationError:
             continue
     return citations
+
+
+def _valid_artifact_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    artifacts: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            if hasattr(item, "model_dump"):
+                item = item.model_dump(mode="json")
+            else:
+                continue
+        try:
+            artifact = artifact_from_public_dict(item)
+        except (TypeError, ValueError, ValidationError):
+            continue
+        artifacts.append(artifact.model_dump(mode="json"))
+    return _dedupe_artifacts(artifacts)
 
 
 def _rag_status(

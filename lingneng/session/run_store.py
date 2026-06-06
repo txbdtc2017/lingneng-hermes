@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from lingneng.tools.artifacts import artifact_from_public_dict, dedupe_artifacts
+
 
 class RunStatus(str, Enum):
     RUNNING = "running"
@@ -98,7 +100,7 @@ class LingNengRunStore:
         self,
         run_id: str,
         answer: str,
-        artifacts: list[dict[str, Any]] | None = None,
+        artifacts: list[Any] | None = None,
         citations: list[Any] | None = None,
     ) -> None:
         now = _now()
@@ -120,7 +122,7 @@ class LingNengRunStore:
                 (
                     RunStatus.SUCCEEDED.value,
                     answer,
-                    _dump_json_list(artifacts),
+                    _dump_artifacts_json(artifacts),
                     _dump_json_list(citations),
                     _to_db_time(now),
                     _to_db_time(now),
@@ -278,7 +280,7 @@ def _record_from_row(row: sqlite3.Row) -> RunRecord:
         error_code=row["error_code"],
         error_message=row["error_message"],
         citations=_dict_list_from_json(row["citations_json"]),
-        artifacts=_dict_list_from_json(row["artifacts_json"]),
+        artifacts=_artifacts_from_json(row["artifacts_json"]),
         created_at=_from_db_time(row["created_at"]),
         updated_at=_from_db_time(row["updated_at"]),
         completed_at=_from_optional_db_time(row["completed_at"]),
@@ -287,6 +289,10 @@ def _record_from_row(row: sqlite3.Row) -> RunRecord:
 
 def _dump_json_list(value: list[Any] | None) -> str:
     return json.dumps(_jsonable(value or []), ensure_ascii=False)
+
+
+def _dump_artifacts_json(value: list[Any] | None) -> str:
+    return json.dumps(_valid_artifact_dicts(value or []), ensure_ascii=False)
 
 
 def _jsonable(value: Any) -> Any:
@@ -307,3 +313,21 @@ def _dict_list_from_json(value: str | None) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         return []
     return [item for item in parsed if isinstance(item, dict)]
+
+
+def _artifacts_from_json(value: str | None) -> list[dict[str, Any]]:
+    return _valid_artifact_dicts(_dict_list_from_json(value))
+
+
+def _valid_artifact_dicts(value: list[Any]) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    for item in value:
+        jsonable_item = _jsonable(item)
+        if not isinstance(jsonable_item, dict):
+            continue
+        try:
+            artifact = artifact_from_public_dict(jsonable_item)
+        except (TypeError, ValueError):
+            continue
+        artifacts.append(artifact.model_dump(mode="json"))
+    return dedupe_artifacts(artifacts)

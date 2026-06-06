@@ -17,7 +17,9 @@ from lingneng.events.bridge import (
     agent_step_completed,
     agent_step_skipped,
     agent_step_started,
+    artifact_events_from_tool_result,
     answer_delta,
+    dedupe_artifacts,
     dedupe_citations,
     final_answer,
     rag_events_from_tool_result,
@@ -125,6 +127,7 @@ class HermesAgentRunAdapter:
         tool_progress_lock = threading.Lock()
         streamed_text: list[str] = []
         rag_citations: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
 
         def on_delta(text: str | None) -> None:
             nonlocal sequence
@@ -174,7 +177,20 @@ class HermesAgentRunAdapter:
                         rag_citations[:] = dedupe_citations(
                             [*rag_citations, *citations]
                         )
-                    events = [event, *rag_events]
+                    artifact_events = []
+                    new_artifacts = []
+                    if not bool(kwargs.get("is_error")):
+                        artifact_events, new_artifacts = (
+                            artifact_events_from_tool_result(
+                                tool_name=tool_name,
+                                result=kwargs.get("result"),
+                            )
+                        )
+                    if new_artifacts:
+                        artifacts[:] = dedupe_artifacts(
+                            [*artifacts, *new_artifacts]
+                        )
+                    events = [event, *artifact_events, *rag_events]
                 elif event_name in {"tool.skipped", "tool.blocked"}:
                     tool_sequence += 1
                     event = agent_step_skipped(
@@ -242,6 +258,7 @@ class HermesAgentRunAdapter:
                         if request.stream_options.include_citations
                         else []
                     ),
+                    artifacts=artifacts,
                 )
                 return
 

@@ -10,6 +10,7 @@ from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    ArtifactCreatedEvent,
     CitationDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -19,6 +20,33 @@ from lingneng.schemas.chat_events import (
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
+
+
+ARTIFACT = {
+    "artifact_id": "artifact-doc-1",
+    "artifact_type": "document",
+    "source": "document_generation",
+    "file_name": "report.pdf",
+    "mime_type": "application/pdf",
+    "url": "https://files.example.test/report.pdf",
+    "object_key": "external/java-agent-file/artifact-doc-1",
+    "format": "pdf",
+    "target_format": "pdf",
+    "conversion_required": False,
+    "conversion_owner": None,
+}
+IMAGE_ARTIFACT = {
+    **ARTIFACT,
+    "artifact_id": "artifact-img-1",
+    "artifact_type": "image",
+    "source": "image_generation",
+    "file_name": "poster.png",
+    "mime_type": "image/png",
+    "url": "https://files.example.test/poster.png",
+    "object_key": "external/java-agent-file/artifact-img-1",
+    "format": "png",
+    "target_format": "png",
+}
 
 
 def settings(tmp_path) -> LingNengSettings:
@@ -146,6 +174,84 @@ class RagNotConfiguredToolProgressAgent:
                     "code": "NOT_CONFIGURED",
                     "message": "LingNeng RAG provider is not configured.",
                 }
+            ),
+        )
+        return {"final_response": "完成", "messages": []}
+
+
+class ArtifactToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.tool_progress_callback("tool.started", "document_generation", None, {})
+        self.tool_progress_callback(
+            "tool.completed",
+            "document_generation",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": True,
+                    "tool_name": "document_generation",
+                    "status": "succeeded",
+                    "summary": "完成",
+                    "safe_output": {"artifact_count": 1},
+                    "artifacts": [ARTIFACT],
+                    "metadata": {},
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.stream_delta_callback("完成")
+        return {"final_response": "完成", "messages": []}
+
+
+class DuplicateArtifactToolProgressAgent:
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.tool_progress_callback(
+            "tool.completed",
+            "document_generation",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": True,
+                    "tool_name": "document_generation",
+                    "status": "succeeded",
+                    "artifacts": [ARTIFACT],
+                    "metadata": {},
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.tool_progress_callback(
+            "tool.completed",
+            "image_generation",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": True,
+                    "tool_name": "image_generation",
+                    "status": "succeeded",
+                    "artifacts": [
+                        {**ARTIFACT, "file_name": "duplicate.pdf"},
+                        IMAGE_ARTIFACT,
+                    ],
+                    "metadata": {},
+                },
+                ensure_ascii=False,
             ),
         )
         return {"final_response": "完成", "messages": []}
@@ -319,6 +425,47 @@ async def test_retrieve_rag_failure_without_status_emits_failed_context(tmp_path
     assert rag_contexts[0].context == "LingNeng RAG provider is not configured."
     assert isinstance(events[-1], FinalEvent)
     assert events[-1].citations == []
+
+
+@pytest.mark.asyncio
+async def test_artifact_tool_completion_emits_artifact_before_answer(tmp_path):
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(settings(tmp_path), agent_cls=ArtifactToolProgressAgent)
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    names = [type(event).__name__ for event in events]
+    completed_index = next(
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, AgentStepEvent) and event.status == "succeeded"
+    )
+    artifact_index = names.index("ArtifactCreatedEvent")
+    answer_index = names.index("AnswerDeltaEvent")
+    final = events[-1]
+
+    assert completed_index < artifact_index < answer_index
+    assert isinstance(events[artifact_index], ArtifactCreatedEvent)
+    assert isinstance(final, FinalEvent)
+    assert final.artifacts[0].artifact_id == "artifact-doc-1"
+
+
+@pytest.mark.asyncio
+async def test_final_artifacts_are_deduped_in_first_seen_order(tmp_path):
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(
+        settings(tmp_path),
+        agent_cls=DuplicateArtifactToolProgressAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    final = events[-1]
+
+    assert isinstance(final, FinalEvent)
+    assert [artifact.artifact_id for artifact in final.artifacts] == [
+        "artifact-doc-1",
+        "artifact-img-1",
+    ]
+    assert final.artifacts[0].file_name == "report.pdf"
 
 
 @pytest.mark.asyncio

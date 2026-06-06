@@ -7,6 +7,7 @@ from lingneng.api.app import create_app
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
+    ArtifactCreatedEvent,
     ErrorEvent,
     FinalEvent,
     RunStartedEvent,
@@ -72,6 +73,30 @@ class CountingSuccessAdapter:
     ) -> AsyncIterator[RunStartedEvent | AnswerDeltaEvent | FinalEvent]:
         self.calls += 1
         yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield AnswerDeltaEvent(text="完成", sequence=1)
+        yield FinalEvent(
+            run_id=run_id,
+            status="succeeded",
+            answer="完成",
+            artifacts=[ARTIFACT],
+        )
+
+
+class ArtifactStreamingAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[
+        RunStartedEvent | ArtifactCreatedEvent | AnswerDeltaEvent | FinalEvent
+    ]:
+        self.calls += 1
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield ArtifactCreatedEvent.model_validate(ARTIFACT)
         yield AnswerDeltaEvent(text="完成", sequence=1)
         yield FinalEvent(
             run_id=run_id,
@@ -173,6 +198,35 @@ def test_repeated_success_replays_stored_sse_without_adapter(tmp_path):
     assert frames[2][1]["status"] == "succeeded"
     assert frames[2][1]["answer"] == "完成"
     assert frames[2][1]["artifacts"] == [ARTIFACT]
+    assert adapter.calls == 1
+
+
+def test_live_artifact_created_event_then_replay_final_artifacts(tmp_path):
+    adapter = ArtifactStreamingAdapter()
+    store = LingNengRunStore(tmp_path / "runs.sqlite3")
+    app = create_app(settings=settings(tmp_path), adapter=adapter, run_store=store)
+    client = TestClient(app)
+
+    first = post(client, full_payload())
+    second = post(client, full_payload())
+    first_frames = parse_sse(first.text)
+    second_frames = parse_sse(second.text)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [event for event, _ in first_frames] == [
+        "run_started",
+        "artifact_created",
+        "answer_delta",
+        "final",
+    ]
+    assert first_frames[1][1] == ARTIFACT
+    assert [event for event, _ in second_frames] == [
+        "run_started",
+        "answer_delta",
+        "final",
+    ]
+    assert second_frames[-1][1]["artifacts"] == [ARTIFACT]
     assert adapter.calls == 1
 
 

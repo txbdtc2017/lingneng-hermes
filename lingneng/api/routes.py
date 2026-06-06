@@ -16,6 +16,7 @@ from lingneng.runtime.agent_adapter import AgentRunAdapter
 from lingneng.schemas.chat_events import (
     AgentStepEvent,
     AnswerDeltaEvent,
+    ArtifactCreatedEvent,
     CitationDeltaEvent,
     ErrorEvent,
     FinalEvent,
@@ -233,6 +234,7 @@ def _event_name(
     event: (
         RunStartedEvent
         | AgentStepEvent
+        | ArtifactCreatedEvent
         | CitationDeltaEvent
         | RagContextEvent
         | AnswerDeltaEvent
@@ -244,6 +246,8 @@ def _event_name(
         return "run_started"
     if isinstance(event, AgentStepEvent):
         return "agent_step"
+    if isinstance(event, ArtifactCreatedEvent):
+        return "artifact_created"
     if isinstance(event, CitationDeltaEvent):
         return "citation_delta"
     if isinstance(event, RagContextEvent):

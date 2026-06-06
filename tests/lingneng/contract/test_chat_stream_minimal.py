@@ -49,9 +49,11 @@ def test_hermes_mode_no_tool_chat_stream_contract(tmp_path):
     )
     adapter = HermesAgentRunAdapter(settings=settings, agent_cls=ContractAgent)
     app = create_app(settings=settings, adapter=adapter)
+    payload = full_payload()
+    payload["attachments"] = []
     response = TestClient(app).post(
         "/internal/agent/chat/stream",
-        json=full_payload(),
+        json=payload,
         headers={"X-Internal-Key": INTERNAL_KEY},
     )
 

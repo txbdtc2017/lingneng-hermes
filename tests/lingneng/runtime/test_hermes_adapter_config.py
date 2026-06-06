@@ -10,10 +10,14 @@ from lingneng.api.app import create_app
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.fake_agent import FakeAgentRunAdapter
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
-from lingneng.schemas.chat_events import FinalEvent
+from lingneng.schemas.chat_events import AgentStepEvent, FinalEvent
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from lingneng.session.run_store import LingNengRunStore
+from lingneng.tools.attachments import (
+    AttachmentProcessingResult,
+    attachment_processing_context,
+)
 from tests.lingneng.skills.test_skill_loader import write_skill
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
@@ -142,6 +146,18 @@ class RecordingSystemPromptAgent:
     ):
         type(self).system_message_seen = system_message or ""
         return {"final_response": "完成", "messages": []}
+
+
+class FakeAttachmentProvider:
+    def __init__(self, result):
+        self.result = result
+        self.requests = []
+
+    def process(self, request):
+        self.requests.append(request)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
 
 
 class KanbanEnvProbeAgent:
@@ -397,6 +413,200 @@ async def test_hermes_adapter_injects_bounded_skill_prompt(tmp_path):
     assert "写营销内容" in prompt
     assert "INLINE MUST NOT APPEAR" not in prompt
     assert "上一轮用户问题" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_is_added_to_current_system_prompt_only(
+    tmp_path,
+):
+    payload = full_payload()
+    payload["history"] = [
+        {
+            "message_id": "h-history",
+            "role": "user",
+            "content": "history content marker",
+        }
+    ]
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.pdf",
+            "mime_type": "application/pdf",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.pdf",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    second_payload = full_payload()
+    second_payload["request_id"] = "req-no-attachment"
+    second_payload["attachments"] = []
+    second_request = ChatStreamRequest.model_validate(second_payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    with attachment_processing_context(provider=provider):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    first_prompt = RecordingSystemPromptAgent.system_message_seen
+    [event async for event in adapter.stream(second_request, resolved, "run-2")]
+    second_prompt = RecordingSystemPromptAgent.system_message_seen
+
+    assert isinstance(events[-1], FinalEvent)
+    assert "当前附件摘要" in first_prompt
+    assert "## LingNeng Current Request Attachments" in first_prompt
+    assert "history content marker" not in first_prompt
+    assert "当前附件摘要" not in second_prompt
+    assert "## LingNeng Current Request Attachments" not in second_prompt
+    assert [req.attachments[0].file_id for req in provider.requests] == ["file-1"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_path):
+    skill_root = tmp_path / "skills"
+    write_skill(
+        skill_root,
+        "employee-marketing-content-creator",
+        kind="employee_base",
+        employee_type="marketing_content_creator",
+        display_name="内容创意师",
+        body="## Role Identity\n你是内容创意师。",
+    )
+    payload = full_payload()
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.pdf",
+            "mime_type": "application/pdf",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.pdf",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path / "runtime",
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+            LINGNENG_SKILL_ROOTS=str(skill_root),
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    with attachment_processing_context(provider=provider):
+        [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    prompt = RecordingSystemPromptAgent.system_message_seen
+    skill_index = prompt.index("## LingNeng Skill Context")
+    attachment_index = prompt.index("## LingNeng Current Request Attachments")
+    rag_index = prompt.index("## LingNeng RAG Guidance")
+    assert skill_index < attachment_index < rag_index
+
+
+@pytest.mark.asyncio
+async def test_attachment_processing_emits_started_and_completed_steps(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    attachment_steps = [
+        event
+        for event in events
+        if isinstance(event, AgentStepEvent) and event.title == "attachment_processing"
+    ]
+    assert [event.status for event in attachment_steps] == ["started", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_processing_emits_started_and_skipped_steps(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    attachment_steps = [
+        event
+        for event in events
+        if isinstance(event, AgentStepEvent) and event.title == "attachment_processing"
+    ]
+    assert [event.status for event in attachment_steps] == ["started", "skipped"]
+
+
+@pytest.mark.asyncio
+async def test_attachment_processing_emits_started_and_failed_steps(tmp_path):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    provider = FakeAttachmentProvider(
+        RuntimeError("traceback secret-token /Users/rotas/private")
+    )
+
+    with attachment_processing_context(provider=provider):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    attachment_steps = [
+        event
+        for event in events
+        if isinstance(event, AgentStepEvent) and event.title == "attachment_processing"
+    ]
+    assert [event.status for event in attachment_steps] == ["started", "failed"]
+    dumped = "".join(event.model_dump_json() for event in attachment_steps)
+    assert "secret-token" not in dumped
+    assert "/Users/rotas" not in dumped
 
 
 @pytest.mark.asyncio

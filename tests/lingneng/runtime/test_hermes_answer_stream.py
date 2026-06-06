@@ -355,12 +355,15 @@ class ConcurrentToolProgressAgent:
 
 
 def request_and_session():
-    request = ChatStreamRequest.model_validate(full_payload())
+    payload = full_payload()
+    payload["attachments"] = []
+    request = ChatStreamRequest.model_validate(payload)
     return request, resolve_session_key(request)
 
 
 def request_and_session_with_rag_context():
     payload = full_payload()
+    payload["attachments"] = []
     payload["stream_options"]["include_rag_context"] = True
     request = ChatStreamRequest.model_validate(payload)
     return request, resolve_session_key(request)

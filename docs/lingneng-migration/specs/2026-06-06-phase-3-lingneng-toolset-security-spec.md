@@ -95,6 +95,11 @@ contract reference. Do not implement there.
 - Stub tools may be callable by Hermes during Phase 3, but they must clearly
   report that the business backend is not configured yet. Real behavior lands
   in later phases.
+- Phase 3 does not expose a LingNeng `web_search` tool name. Hermes already
+  owns a built-in `web_search` registry entry, and reusing that exact name in
+  Phase 3 would either expose Hermes default search behavior to Java or require
+  a global registry override that would break non-LingNeng Hermes surfaces.
+  A LingNeng-safe search adapter and naming strategy belong to a later phase.
 - `toolsets.py` may add a static `lingneng` entry. It must not include Hermes
   default toolsets or compose from broader Hermes toolsets.
 - `lingneng/tools/toolset.py` owns registration side effects for LingNeng stub
@@ -146,7 +151,6 @@ The `lingneng` toolset must expose exactly these Phase 3 business tool names:
 - `document_generation`
 - `image_generation`
 - `chart_visualization`
-- `web_search`
 - `read_workspace`
 - `write_workspace`
 
@@ -169,7 +173,6 @@ arguments for the model to express intent safely:
 - `document_generation`: `instruction`, optional `format`
 - `image_generation`: `prompt`, optional `style`
 - `chart_visualization`: `instruction`, optional `data`
-- `web_search`: `query`, optional `limit`
 - `read_workspace`: `path`, optional `purpose`
 - `write_workspace`: `path`, `content`, optional `purpose`
 
@@ -208,15 +211,16 @@ The decoded object must not include:
 `validate_toolset("lingneng")` must return `True`.
 
 `resolve_toolset("lingneng")` must return the approved LingNeng tool names and
-must not include high-risk Hermes tool names.
+must not include disallowed Hermes tool names.
 
 `get_tool_definitions(enabled_toolsets=["lingneng"], disabled_toolsets=["kanban"],
 quiet_mode=True)` must return only LingNeng tool schemas that pass registry
 availability checks.
 
-The LingNeng toolset must not expose any of these high-risk names:
+The LingNeng toolset must not expose any of these disallowed Hermes names:
 
 - `terminal`
+- `web_search`
 - `process`
 - `read_file`
 - `write_file`
@@ -247,10 +251,11 @@ The LingNeng toolset must not expose any of these high-risk names:
 - `kanban_link`
 - `kanban_unblock`
 
-The LingNeng business `web_search`, `read_workspace`, and `write_workspace`
-names are allowed because they are LingNeng-controlled stubs in this phase.
-They must not dispatch to Hermes default web/file tools until later phases
-explicitly define safe business adapters.
+The LingNeng business `read_workspace` and `write_workspace` names are allowed
+because they are LingNeng-controlled stubs in this phase. They must not
+dispatch to Hermes default file tools until later phases explicitly define safe
+business adapters. The LingNeng business search capability is deferred because
+the exact `web_search` name collides with Hermes core.
 
 ### Agent Adapter Tool Configuration
 

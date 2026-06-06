@@ -46,6 +46,25 @@ def test_rag_hit_emits_citation_and_context_when_requested():
     assert citations == [CITATION]
 
 
+def test_rag_context_allows_benign_request_query_input_words():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            context="Customer request classification and query input routing policy."
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert (
+        events[1].context
+        == "Customer request classification and query input routing policy."
+    )
+    assert events[1].status == "hit"
+    assert citations == [CITATION]
+
+
 def test_rag_empty_emits_empty_context_only_when_requested():
     events, citations = rag_events_from_tool_result(
         tool_name="retrieve_rag",

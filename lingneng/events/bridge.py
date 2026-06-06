@@ -22,16 +22,19 @@ _PUBLIC_TEXT_BLOCKLIST = (
     "api_key",
     "secret",
     "token",
+    "authorization",
+    "bearer",
+    "traceback",
+    "exception",
+)
+_METADATA_KEY_BLOCKLIST = (
+    *_PUBLIC_TEXT_BLOCKLIST,
     "request",
     "payload",
     "query",
     "args",
     "history",
     "input",
-    "authorization",
-    "bearer",
-    "traceback",
-    "exception",
 )
 
 
@@ -273,7 +276,7 @@ def _sanitize_public_value(value: Any) -> Any:
         return {
             str(key): _sanitize_public_value(item)
             for key, item in value.items()
-            if _is_public_text(str(key))
+            if _is_public_metadata_key(str(key))
         }
     if isinstance(value, list | tuple):
         return [_sanitize_public_value(item) for item in value]
@@ -282,3 +285,8 @@ def _sanitize_public_value(value: Any) -> Any:
     if value is None or isinstance(value, bool | int | float):
         return value
     return None
+
+
+def _is_public_metadata_key(value: str) -> bool:
+    lowered = value.lower()
+    return not any(part in lowered for part in _METADATA_KEY_BLOCKLIST)

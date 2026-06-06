@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Literal, Mapping
@@ -17,6 +18,21 @@ def _bool_from_env(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _path_list_from_env(value: str | None) -> list[Path]:
+    if value is None:
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        parsed = json.loads(stripped)
+        if not isinstance(parsed, list):
+            raise ValueError("LINGNENG_SKILL_ROOTS JSON value must be a list")
+        return [Path(str(item).strip()) for item in parsed if str(item).strip()]
+    normalized = stripped.replace("\n", ",")
+    return [Path(part.strip()) for part in normalized.split(",") if part.strip()]
+
+
 class LingNengSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -32,6 +48,15 @@ class LingNengSettings(BaseModel):
     archived_session_retention_days: int = 180
     idempotency_retention_days: int = 7
     heartbeat_interval_seconds: float = 15.0
+    skill_roots: list[Path] = Field(default_factory=list)
+    skill_excerpt_max_chars: int = 4000
+    skill_prompt_max_chars: int = 12000
+    rag_endpoint: str = ""
+    rag_api_key: str = Field(default="", repr=False)
+    rag_timeout_seconds: float = 5.0
+    rag_default_top_k: int = 5
+    rag_max_top_k: int = 20
+    rag_context_max_chars: int = 6000
 
     @model_validator(mode="after")
     def _default_session_db_path(self) -> "LingNengSettings":
@@ -68,6 +93,23 @@ class LingNengSettings(BaseModel):
             heartbeat_interval_seconds=float(
                 source.get("LINGNENG_HEARTBEAT_INTERVAL_SECONDS", "15.0")
             ),
+            skill_roots=_path_list_from_env(source.get("LINGNENG_SKILL_ROOTS")),
+            skill_excerpt_max_chars=int(
+                source.get("LINGNENG_SKILL_EXCERPT_MAX_CHARS", "4000")
+            ),
+            skill_prompt_max_chars=int(
+                source.get("LINGNENG_SKILL_PROMPT_MAX_CHARS", "12000")
+            ),
+            rag_endpoint=source.get("LINGNENG_RAG_ENDPOINT", ""),
+            rag_api_key=source.get("LINGNENG_RAG_API_KEY", ""),
+            rag_timeout_seconds=float(
+                source.get("LINGNENG_RAG_TIMEOUT_SECONDS", "5.0")
+            ),
+            rag_default_top_k=int(source.get("LINGNENG_RAG_DEFAULT_TOP_K", "5")),
+            rag_max_top_k=int(source.get("LINGNENG_RAG_MAX_TOP_K", "20")),
+            rag_context_max_chars=int(
+                source.get("LINGNENG_RAG_CONTEXT_MAX_CHARS", "6000")
+            ),
         )
 
     @property
@@ -94,4 +136,6 @@ class LingNengSettings(BaseModel):
             "runtime_dir": str(self.runtime_dir),
             "session_db_path": str(self.session_db_path),
             "auth_required": self.auth_required,
+            "skill_root_count": len(self.skill_roots),
+            "rag_configured": bool(self.rag_endpoint),
         }

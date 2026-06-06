@@ -139,3 +139,65 @@ def test_agent_mode_accepts_hermes():
 def test_unknown_agent_mode_is_rejected():
     with pytest.raises(ValidationError):
         LingNengSettings.from_env({"LINGNENG_AGENT_MODE": "unsafe"})
+
+
+def test_skill_and_rag_settings_defaults_are_safe(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_APP_ENV": "test",
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_INTERNAL_API_KEY": "key",
+        }
+    )
+
+    assert settings.skill_roots == []
+    assert settings.skill_excerpt_max_chars == 4000
+    assert settings.skill_prompt_max_chars == 12000
+    assert settings.rag_endpoint == ""
+    assert settings.rag_api_key == ""
+    assert settings.rag_timeout_seconds == 5.0
+    assert settings.rag_default_top_k == 5
+    assert settings.rag_max_top_k == 20
+    assert settings.rag_context_max_chars == 6000
+
+
+def test_skill_roots_parse_json_comma_and_newline(tmp_path):
+    first = tmp_path / "employees"
+    second = tmp_path / "tasks"
+    json_settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_SKILL_ROOTS": f'["{first}", "{second}"]',
+        }
+    )
+    comma_settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_SKILL_ROOTS": f"{first},{second}",
+        }
+    )
+    newline_settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_SKILL_ROOTS": f"{first}\n{second}",
+        }
+    )
+
+    assert json_settings.skill_roots == [first, second]
+    assert comma_settings.skill_roots == [first, second]
+    assert newline_settings.skill_roots == [first, second]
+
+
+def test_ready_summary_hides_rag_api_key(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_APP_ENV": "test",
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_INTERNAL_API_KEY": "key",
+            "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve",
+            "LINGNENG_RAG_API_KEY": "secret-rag-key",
+        }
+    )
+
+    summary = settings.ready_summary()
+
+    assert summary["rag_configured"] is True
+    assert "rag_api_key" not in summary
+    assert "secret-rag-key" not in repr(summary)

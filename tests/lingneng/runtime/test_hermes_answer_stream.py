@@ -241,6 +241,37 @@ class ArtifactToolDeltaBeforeCompletionAgent:
         return {"final_response": "生成中", "messages": []}
 
 
+class ArtifactToolDeltaBeforeStartAgent:
+    def __init__(self, **kwargs):
+        self.stream_delta_callback = kwargs.get("stream_delta_callback")
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, *args, **kwargs):
+        self.stream_delta_callback("before")
+        self.tool_progress_callback("tool.started", "document_generation", None, {})
+        self.tool_progress_callback(
+            "tool.completed",
+            "document_generation",
+            None,
+            None,
+            duration=0.01,
+            is_error=False,
+            result=json.dumps(
+                {
+                    "success": True,
+                    "tool_name": "document_generation",
+                    "status": "succeeded",
+                    "summary": "完成",
+                    "safe_output": {"artifact_count": 1},
+                    "artifacts": [ARTIFACT],
+                    "metadata": {},
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return {"final_response": "before", "messages": []}
+
+
 class DuplicateArtifactToolProgressAgent:
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -497,6 +528,27 @@ async def test_delta_during_artifact_tool_is_buffered_until_artifact_event(tmp_p
     assert artifact_index < answer_index
     assert isinstance(events[answer_index], AnswerDeltaEvent)
     assert events[answer_index].text == "生成中"
+    assert isinstance(final, FinalEvent)
+    assert final.artifacts[0].artifact_id == "artifact-doc-1"
+
+
+@pytest.mark.asyncio
+async def test_delta_before_artifact_tool_start_waits_for_artifact_event(tmp_path):
+    request, resolved = request_and_session()
+    adapter = HermesAgentRunAdapter(
+        settings(tmp_path),
+        agent_cls=ArtifactToolDeltaBeforeStartAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    names = [type(event).__name__ for event in events]
+    artifact_index = names.index("ArtifactCreatedEvent")
+    answer_index = names.index("AnswerDeltaEvent")
+    final = events[-1]
+
+    assert artifact_index < answer_index
+    assert isinstance(events[answer_index], AnswerDeltaEvent)
+    assert events[answer_index].text == "before"
     assert isinstance(final, FinalEvent)
     assert final.artifacts[0].artifact_id == "artifact-doc-1"
 

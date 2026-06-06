@@ -131,6 +131,7 @@ class HermesAgentRunAdapter:
         artifacts: list[dict[str, Any]] = []
         buffered_answer_events: list[AnswerDeltaEvent] = []
         active_artifact_tools = 0
+        answer_flush_scheduled = False
 
         def on_delta(text: str | None) -> None:
             nonlocal sequence
@@ -139,11 +140,31 @@ class HermesAgentRunAdapter:
             with tool_progress_lock:
                 sequence += 1
                 streamed_text.append(text)
-                event = answer_delta(text=text, sequence=sequence)
-                if active_artifact_tools:
-                    buffered_answer_events.append(event)
+                buffered_answer_events.append(
+                    answer_delta(text=text, sequence=sequence)
+                )
+                schedule_answer_flush_locked()
+
+        def schedule_answer_flush_locked() -> None:
+            nonlocal answer_flush_scheduled
+            if answer_flush_scheduled:
+                return
+            answer_flush_scheduled = True
+            loop.call_soon_threadsafe(defer_answer_flush)
+
+        def defer_answer_flush() -> None:
+            loop.call_soon(flush_pending_answer_events_if_ready)
+
+        def flush_pending_answer_events_if_ready() -> None:
+            nonlocal answer_flush_scheduled
+            with tool_progress_lock:
+                answer_flush_scheduled = False
+                if active_artifact_tools or not buffered_answer_events:
                     return
-            loop.call_soon_threadsafe(queue.put_nowait, event)
+                events = list(buffered_answer_events)
+                buffered_answer_events.clear()
+            for event in events:
+                queue.put_nowait(event)
 
         def on_tool_progress(
             event_name: str,
@@ -268,6 +289,7 @@ class HermesAgentRunAdapter:
                     pending_answer_events = list(buffered_answer_events)
                     buffered_answer_events.clear()
                     active_artifact_tools = 0
+                    answer_flush_scheduled = False
                 for event in pending_answer_events:
                     yield event
                 if not streamed_text:

@@ -20,7 +20,8 @@ Hermes fork 位于 `/Users/rotas/Documents/work/hailun/demos/lingneng-hermes`。
 4. 使用 Java 请求中的 `conversation_id` 作为业务会话标识，并在 Python 内部组合租户、用户和员工维度形成真正的 session key。
 5. 将 LingNeng 当前业务能力迁入 Hermes 工具层，包括 RAG、技能读取、文档生成、图片生成、图表生成、联网搜索和附件理解相关能力。
 6. 将 Hermes 的流式文本、工具进度、生成物和终态映射成 LingNeng 当前 Java 稳定消费的 SSE 事件合同。
-7. 业务跑通后，再进入第二阶段清理 Hermes 中对 LingNeng 无用的渠道、UI、插件或默认工具。
+7. 保留后续 Docker 镜像构建、服务器 Docker Compose 部署、dev/test 环境隔离、健康检查、失败回滚和 GitHub Actions CI/CD 接入所需的架构边界，但当前实施优先完成 runtime 改造。
+8. 业务跑通并完成验收后，再进入专门的裁剪阶段，清理或禁用 Hermes 中对 LingNeng 无用的渠道、UI、插件或默认工具。
 
 ## 3. 非目标
 
@@ -30,7 +31,8 @@ Hermes fork 位于 `/Users/rotas/Documents/work/hailun/demos/lingneng-hermes`。
 - 不删除 Hermes 原有渠道、桌面端、TUI、Cron、Kanban、插件目录或默认功能。
 - 不直接复刻 LingNengAI 当前 LangGraph ChatGraph。Hermes runtime 是新主干，LingNengAI 只作为业务能力和接口合同参考。
 - 不把 Java 历史消息继续作为 Agent 长期上下文来源。
-- 不在第一阶段重构培训入库、AIGC MQ 回流和部署体系，除非对话业务工具接入必须依赖它们的最小接口。
+- 不在第一阶段重构培训入库和 AIGC MQ 回流体系，除非对话业务工具接入必须依赖它们的最小接口。
+- 不在当前改造阶段交付生产部署链路、服务器 compose、K8s 编排或 GitHub Actions 部署 workflow；这些能力作为后续部署阶段实现。
 
 ## 4. 关键设计决策
 
@@ -90,6 +92,18 @@ Java 可能因为网络、SSE 断开或调用超时重试同一个请求。Herme
 - 如果同一个 `request_id` 正在运行，重复请求不能启动第二个 Agent loop。
 - 幂等记录至少保存 request 状态、run_id、最终 answer、artifacts、错误状态和完成时间。
 
+### 4.6 Docker 与服务器部署作为后续交付能力
+
+LingNeng-Hermes 必须保留 Hermes 可本地运行的开发方式，同时为后续 LingNeng 业务部署路径预留边界。部署设计以当前 LingNengAI 项目为能力基准，但当前改造阶段不把 Docker、compose、服务器部署脚本作为阻塞项：
+
+- 服务镜像可从仓库源码构建，镜像内包含 Python runtime、Hermes 运行依赖、LingNeng API facade、必要静态资源和启动入口。
+- 服务器运行以 Docker Compose 为第一交付物，支持 `dev` 和 `test` 两套目录、端口、topic、bucket、collection、Redis key prefix 和运行时数据隔离。
+- 部署资产必须包含 compose 模板、`.env` 示例、部署脚本、健康检查脚本、部署元数据和失败回滚机制。
+- API 服务默认只绑定内网或本机可控地址；对 Java 暴露的 host/port 必须通过环境配置显式指定，不把高风险 Hermes dashboard/gateway 默认暴露到公网。
+- 镜像和部署脚本不得把 LLM key、Java internal key、MinIO、Redis、Milvus、Nacos、搜索等密钥写进 Git。CI/CD 面向 GitHub Actions secrets 或服务器 `.env` 注入。
+- 部署完成后必须验证 `/internal/agent/health`、`/internal/agent/ready` 和 `/internal/agent/chat/stream` 的最小 SSE 合同。
+- 后续部署阶段的 Docker 入口只要求先跑通 Java 对话入口；RAG、artifact、worker、console 等服务按后续业务能力增量接入。
+
 ## 5. 目标架构
 
 ### 5.1 运行边界
@@ -109,7 +123,21 @@ flowchart LR
     Bridge -->|LingNeng P1 SSE| Java
 ```
 
-### 5.2 新增模块职责
+### 5.2 后续部署边界
+
+```mermaid
+flowchart LR
+    CI["GitHub / GitHub Actions"] --> Image["lingneng-hermes 镜像"]
+    Image --> Compose["服务器 Docker Compose"]
+    Env["dev/test .env"] --> Compose
+    Compose --> API["lingneng-hermes-api"]
+    Compose --> Data["挂载数据: SessionDB / run store / logs / artifacts"]
+    API --> Health["/internal/agent/health / ready"]
+    API --> Stream["/internal/agent/chat/stream"]
+    Java["Java 业务系统"] --> Stream
+```
+
+### 5.3 新增模块职责
 
 建议在 Hermes fork 中新增 `lingneng/` 业务命名空间，避免一开始污染 Hermes 核心文件：
 
@@ -120,6 +148,7 @@ flowchart LR
 - `lingneng/tools/`：LingNeng 业务工具注册、工具 schema、工具执行器。
 - `lingneng/skills/`：数字员工技能包加载、裁剪和注入策略。
 - `lingneng/config/`：Java internal auth、业务工具开关、外部服务地址等配置。
+- `deploy/lingneng/`：后续部署阶段的 Docker Compose、环境模板、部署脚本和健康检查资产。
 
 Hermes 原有 `run_agent.py`、`model_tools.py`、`toolsets.py`、`gateway/platforms/api_server.py` 应尽量少改。需要接入时优先通过现有 callback、tool registry、plugin 或 API server mount 扩展；确实需要小改核心时，改动要围绕稳定扩展点，不写 LingNeng 专用硬编码逻辑。
 
@@ -270,9 +299,73 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 
 业务工具可以继续调用 LingNengAI 现有外部依赖或 Java 内部接口，包括 RAG、文件转换、AIGC、MinIO、搜索服务等。第一阶段不强制把这些底层服务全部迁入 Hermes，只迁移 agent-facing 工具接口和事件返回。
 
-## 9. 错误处理与可观测性
+## 9. 后续 Docker 部署与交付设计
 
-### 9.1 错误事件
+### 9.1 镜像边界
+
+LingNeng-Hermes 后续应提供业务镜像构建路径。镜像启动入口应优先启动 LingNeng API facade，而不是 Hermes 默认 gateway/dashboard。Hermes 原有 Dockerfile 可以作为参考，但 LingNeng 入口需要独立命令、配置和健康检查，避免把面向个人 agent 的服务默认暴露给 Java 业务系统。
+
+镜像内必须具备：
+
+- Python 3.11+ runtime，遵守 Hermes 当前 `requires-python` 约束。
+- Hermes core、LingNeng 新增模块、迁移期需要的工具依赖。
+- 可写运行时目录，用于 SessionDB、run store、日志、临时文件和 artifact 元数据。
+- 非 root 或受控 UID/GID 运行策略，至少不要求容器内以 root 写宿主持久化目录。
+
+### 9.2 Compose 服务模型
+
+后续部署阶段 compose 至少包含：
+
+- `lingneng-hermes-api`：暴露 Java 兼容 HTTP/SSE API。
+- 持久化挂载：`data/runtime`、`logs`，后续 artifact 工具接入后扩展 `data/artifacts`。
+- 可选 `mock-java-service` profile：用于本地和服务器验收，不参与默认生产启动。
+
+后续业务工具接入后可增量增加 worker 或外部依赖配置，但不应在部署初版强制启动 Redis、Milvus、MinIO、RocketMQ 等完整依赖；部署初版允许这些外部服务通过环境变量指向现有 LingNeng 服务器资源。
+
+### 9.3 环境隔离
+
+部署模板必须支持 dev/test 差异化配置，至少包括：
+
+- `APP_ENV`
+- `LINGNENG_HERMES_IMAGE`
+- API bind host、host port、container port
+- LLM provider/base URL/model/max tokens/API key
+- Java base URL 和 Java internal key
+- Redis key prefix
+- Milvus collection/database
+- MinIO bucket/public base URL
+- RocketMQ topic、producer group、consumer group
+- Nacos service name、namespace、group、register IP/port
+- web search provider/API key
+- session/run store 路径和清理保留时间
+
+默认端口不得占用项目规则列出的高风险端口。LingNeng-Hermes 的计划默认使用 `18083` 作为 API host port、`18084` 作为可选 mock Java host port；如服务器已有占用，部署脚本必须支持通过 `.env` 覆盖。
+
+### 9.4 部署脚本与回滚
+
+部署脚本应与 LingNengAI `scripts/deploy-local-test.sh` 的能力对齐：
+
+1. 接收目标镜像 `IMAGE_REF`。
+2. 创建或复用部署目录。
+3. 拷贝 compose 模板和 `.env` 示例。
+4. 将 dev/test 环境覆盖写入 `.env`。
+5. 记录 `.deploy-meta`，至少包含镜像、git sha、部署时间、健康检查 URL。
+6. `docker compose pull/up` 后执行 health/ready/SSE smoke test。
+7. 失败时恢复上一次 `.env` 和镜像并重新健康检查。
+
+### 9.5 GitHub Actions CI/CD 接入
+
+本仓库托管在 GitHub。后续 CI/CD 应以 GitHub Actions 为目标面。目标流程：
+
+- PR 和 push 触发单元测试、contract tests、lint/format 检查。
+- 合入 `dev` 后可构建 `lingneng-hermes` dev 镜像；是否部署到服务器由受保护 environment 或手动 workflow 控制。
+- 合入 `test` 后可构建 test 镜像；是否部署到服务器由受保护 environment 或手动 workflow 控制。
+- GitHub Actions 使用 repository/environment secrets 注入 LLM key、Java internal key、搜索 key 和镜像仓库 token。
+- 部署前运行单元测试、contract tests、Docker build smoke test；部署后运行 health/ready/SSE smoke test。
+
+## 10. 错误处理与可观测性
+
+### 10.1 错误事件
 
 进入 SSE 后，错误通过 `error` event 返回。错误 data 至少包含：
 
@@ -285,7 +378,7 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 
 工具失败时，如果 Agent 能继续，应发送 `agent_step` 说明工具失败并让 Agent 继续；如果不能继续，发送 `error` 并关闭流。
 
-### 9.2 日志与 trace
+### 10.2 日志与 trace
 
 每轮请求日志必须能关联：
 
@@ -298,14 +391,15 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 - `employee_id` 或 `employee_type`
 - 触发的工具名
 - final status
+- 后续部署阶段补充 image ref、部署环境、容器启动时间和 health status
 
 迁移期需要记录 Java `history` 是否存在但不记录完整历史内容，避免噪音和隐私风险。
 
-### 9.3 兼容性验证
+### 10.3 兼容性验证
 
 需要用当前 LingNengAI 的 Java interface contract 作为兼容性基准。第一阶段验收时，Java 不改代码也能消费 Hermes 新入口的 SSE。
 
-## 10. 分阶段实施范围
+## 11. 分阶段实施范围
 
 ### Phase 1: 对话 API 跑通
 
@@ -336,7 +430,13 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 - 明确无用 Hermes 渠道和功能清单。
 - 在验证通过后再做删除或禁用。
 
-## 11. 验收标准
+### Phase 5: Docker 部署与 GitHub Actions 交付（后续）
+
+- 提供 Docker 镜像、compose 模板、`.env` 示例、health/ready endpoint 和部署 smoke test，让最小对话 API 可部署到服务器。
+- 接入 GitHub Actions 的测试、镜像构建和可选 dev/test environment 部署链路。
+- 实现部署健康检查和失败回滚。
+
+## 12. 验收标准
 
 第一阶段完成时：
 
@@ -347,6 +447,7 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 - Java 请求中的 `history` 不影响 Agent 上下文。
 - 同一 `request_id` 重试不会重复追加用户消息。
 - 不向 LingNeng API 暴露 Hermes 高风险默认工具。
+- `/internal/agent/health`、`/internal/agent/ready` 和最小本地 SSE smoke test 通过。
 
 第二阶段完成时：
 
@@ -361,7 +462,19 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 - session 清理策略可配置。
 - 对话 trace 能支持联调排查。
 
-## 12. 风险与控制
+第四阶段完成时：
+
+- Java 业务系统可在不改代码的前提下连接服务器上的 LingNeng-Hermes 服务。
+
+第五阶段完成时：
+
+- 可以构建 `lingneng-hermes` Docker 镜像，并通过 compose 在服务器或等价环境启动最小 API。
+- dev/test 部署参数可通过 `.env` 隔离，密钥不进入 Git。
+- GitHub Actions 可按 `dev`/`test` 分支触发测试、镜像构建和可选部署。
+- 部署失败会自动回滚到上一镜像或保持上一可用版本。
+- 部署 trace 能关联 image ref、git sha、环境、健康检查和回滚结果。
+
+## 13. 风险与控制
 
 | 风险 | 控制方式 |
 | --- | --- |
@@ -372,8 +485,12 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 | 业务工具迁移影响范围大 | 分 Phase 迁移，先跑通纯对话，再接工具 |
 | SSE 事件不兼容 Java | 以 `agent-java-interface-contract-p1.md` 为基准写 contract test |
 | request 重试导致重复上下文 | `request_id` 幂等表和 run 状态机 |
+| Docker 部署暴露 Hermes 非业务服务 | LingNeng compose 默认只启动 API facade，不默认启动 dashboard/gateway |
+| dev/test 环境串数据 | 为端口、Redis key prefix、Milvus collection、MinIO bucket、RocketMQ topic/group 提供环境隔离 |
+| 部署失败影响可用版本 | 部署脚本保存上一 `.env` 和 image ref，失败后自动回滚并重新健康检查 |
+| 密钥进入镜像或 Git | `.env.example` 只放空值和示例空值，CI/CD 通过 GitHub Actions secrets 或服务器 `.env` 注入 |
 
-## 13. 后续计划入口
+## 14. 后续计划入口
 
 本规格通过后，下一步应编写 implementation plan。计划需要按可提交任务拆分，建议至少包含：
 
@@ -384,3 +501,4 @@ LingNeng 当前 employee、base skill、task skill、capability skill 的结构�
 5. LingNeng toolset 骨架。
 6. RAG 与 skill loader 最小迁移。
 7. Java contract tests 和手工联调脚本。
+8. 当前改造完成后的 Dockerfile、compose、部署脚本、health check、GitHub Actions dev/test CI/CD 接入计划。

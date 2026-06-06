@@ -10,6 +10,19 @@ Before doing LingNeng-related work in this repository, read these files in order
 1. `AGENTS.md`
 2. `LINGNENG_MIGRATION_CONTEXT.md`
 3. `docs/lingneng-migration/specs/2026-06-06-lingneng-hermes-runtime-design.md`
+4. `docs/lingneng-migration/plans/2026-06-06-lingneng-hermes-runtime-implementation-plan.md`
+
+## Context Compaction Reload Rule
+
+After every context compaction, resume, or handoff, reload at minimum:
+
+1. `LINGNENG_MIGRATION_CONTEXT.md`
+2. `docs/lingneng-migration/specs/2026-06-06-lingneng-hermes-runtime-design.md`
+3. `docs/lingneng-migration/plans/2026-06-06-lingneng-hermes-runtime-implementation-plan.md`
+
+Do this before writing a phase spec, writing a phase plan, implementing runtime
+code, running verification, committing, or pushing. The total design spec and
+master implementation plan are the durable source of truth after compaction.
 
 Use `/Users/rotas/Documents/work/hailun/LingNengAI` only as the reference
 implementation for current business contracts and behavior. Do not implement the
@@ -48,6 +61,8 @@ or removed.
   `docs/lingneng-migration/`
 - Approved design spec:
   `docs/lingneng-migration/specs/2026-06-06-lingneng-hermes-runtime-design.md`
+- Master implementation plan:
+  `docs/lingneng-migration/plans/2026-06-06-lingneng-hermes-runtime-implementation-plan.md`
 
 ## Java Compatibility Constraints
 

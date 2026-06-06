@@ -141,8 +141,10 @@ def test_rag_skill_chat_stream_contract(tmp_path, monkeypatch):
     )
     citation_index = event_names.index("citation_delta")
     rag_context_index = event_names.index("rag_context")
+    first_answer_index = event_names.index("answer_delta")
     assert completed_step_index < citation_index
     assert completed_step_index < rag_context_index
+    assert completed_step_index < citation_index < rag_context_index < first_answer_index
     assert any(citation["chunk_id"] == "chunk-1" for citation in final["citations"])
     assert (
         "".join(data["text"] for name, data in frames if name == "answer_delta")

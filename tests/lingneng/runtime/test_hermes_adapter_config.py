@@ -48,6 +48,51 @@ def test_create_app_uses_hermes_adapter_for_hermes_mode(tmp_path):
     assert app.state.lingneng_adapter.__class__.__name__ == "HermesAgentRunAdapter"
 
 
+@pytest.mark.asyncio
+async def test_hermes_adapter_passes_resolved_runtime_config_to_agent(
+    tmp_path,
+    monkeypatch,
+):
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "\n".join(
+            [
+                "model:",
+                "  provider: custom:lingneng-dev-llm",
+                "  default: qwen3.6-35b-a3b",
+                "  base_url: http://172.16.10.10:18400/v1",
+                "  api_mode: chat_completions",
+                "custom_providers:",
+                "  - name: lingneng-dev-llm",
+                "    base_url: http://172.16.10.10:18400/v1",
+                "    model: qwen3.6-35b-a3b",
+                "    key_env: OPENAI_API_KEY",
+                "    api_mode: chat_completions",
+                "",
+            ]
+        )
+    )
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-runtime-key")
+    CapturingAgent.calls = []
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=CapturingAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    kwargs = CapturingAgent.calls[0]
+    assert kwargs["model"] == "qwen3.6-35b-a3b"
+    assert kwargs["provider"] == "custom"
+    assert kwargs["base_url"] == "http://172.16.10.10:18400/v1"
+    assert kwargs["api_mode"] == "chat_completions"
+    assert kwargs["api_key"] == "sk-test-runtime-key"
+
+
 def test_runtime_package_import_does_not_load_run_agent():
     result = subprocess.run(
         [

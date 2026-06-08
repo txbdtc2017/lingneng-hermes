@@ -104,6 +104,57 @@ def _install_lingneng_activity_tracker(agent: Any) -> None:
     agent._touch_activity = _touch_activity
 
 
+def _model_config_selection() -> tuple[str | None, str | None]:
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+    except Exception:
+        return None, None
+
+    model_config = config.get("model") if isinstance(config, dict) else None
+    if isinstance(model_config, str):
+        model = model_config.strip()
+        return None, model or None
+    if not isinstance(model_config, dict):
+        return None, None
+
+    provider = str(model_config.get("provider") or "").strip() or None
+    model = (
+        str(model_config.get("default") or model_config.get("model") or "").strip()
+        or None
+    )
+    return provider, model
+
+
+def _resolved_agent_runtime_kwargs() -> dict[str, Any]:
+    provider, model = _model_config_selection()
+    try:
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        runtime = resolve_runtime_provider(
+            requested=provider,
+            target_model=model,
+        )
+    except Exception:
+        return {}
+
+    kwargs: dict[str, Any] = {}
+    resolved_model = runtime.get("model") or model
+    if resolved_model:
+        kwargs["model"] = resolved_model
+    for source_key, target_key in (
+        ("provider", "provider"),
+        ("base_url", "base_url"),
+        ("api_key", "api_key"),
+        ("api_mode", "api_mode"),
+    ):
+        value = runtime.get(source_key)
+        if value:
+            kwargs[target_key] = value
+    return kwargs
+
+
 class HermesAgentRunAdapter:
     def __init__(
         self,
@@ -355,6 +406,7 @@ class HermesAgentRunAdapter:
         import lingneng.tools.toolset  # noqa: F401
 
         agent = self.agent_cls(
+            **_resolved_agent_runtime_kwargs(),
             platform="lingneng",
             session_id=active_session_id or resolved_session.session_key,
             session_db=self.session_store.db,

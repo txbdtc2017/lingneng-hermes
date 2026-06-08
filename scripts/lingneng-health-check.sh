@@ -7,6 +7,8 @@ python_bin="${PYTHON:-python3}"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
+tmp_file="$(mktemp "${TMPDIR:-/tmp}/lingneng-health-check.XXXXXX")"
+trap 'rm -f "$tmp_file"' EXIT
 
 curl_headers=()
 if [[ -n "${LINGNENG_INTERNAL_API_KEY:-}" ]]; then
@@ -51,7 +53,7 @@ echo "checking sse final"
   --employee-id "docker-smoke-employee" \
   --employee-type "boss_assistant" \
   --query "ping" \
-  --timeout-seconds "${timeout_seconds}" | tee /tmp/lingneng-health-check-sse.txt
+  --timeout-seconds "${timeout_seconds}" | tee "$tmp_file"
 
-grep -q "event_order: .*final" /tmp/lingneng-health-check-sse.txt
+grep -q "event_order: .*final" "$tmp_file"
 echo "lingneng health check passed"

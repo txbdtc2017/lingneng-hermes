@@ -21,6 +21,16 @@ def test_health_check_script_checks_health_ready_and_sse() -> None:
     assert "final" in text
 
 
+def test_health_check_script_uses_mktemp_for_sse_output() -> None:
+    text = _script_text()
+
+    assert 'tmp_file="$(mktemp "${TMPDIR:-/tmp}/lingneng-health-check.XXXXXX")"' in text
+    assert 'trap \'rm -f "$tmp_file"\' EXIT' in text
+    assert 'tee "$tmp_file"' in text
+    assert 'grep -q "event_order: .*final" "$tmp_file"' in text
+    assert "/tmp/lingneng-health-check-sse.txt" not in text
+
+
 def test_health_check_script_uses_safe_shell_settings_and_curl() -> None:
     text = _script_text()
 

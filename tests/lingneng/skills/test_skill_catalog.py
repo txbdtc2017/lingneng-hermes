@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -31,11 +32,33 @@ REQUIRED_PACKAGES = {
     "tool-observation-contract",
 }
 
+EXPECTED_EVAL_JSON_FILES = {
+    "tasks/marketing-copy-generation/examples/evals/content-creator-evals.json",
+    "tasks/member-repurchase-campaign/examples/evals/eval-01-rfm-holiday-plan.json",
+    "tasks/member-repurchase-campaign/examples/evals/eval-02-vip-recall-message.json",
+    "tasks/member-repurchase-campaign/examples/evals/eval-03-new-customer-nurture.json",
+    "tasks/restaurant-strategy-planning/examples/evals/operation-strategy-evals.json",
+    "tasks/store-operation-analysis/examples/evals/boss-assistant-evals.json",
+}
+
 
 def _bundled_skill_files() -> list[Path]:
     if not LINGNENG_SKILLS_ROOT.exists():
         return []
     return sorted(LINGNENG_SKILLS_ROOT.rglob("SKILL.md"))
+
+
+def _frontmatter(text: str) -> list[str]:
+    lines = text.splitlines()
+    assert lines and lines[0] == "---"
+    end = next(index for index, line in enumerate(lines[1:], start=1) if line == "---")
+    return lines[1:end]
+
+
+def _frontmatter_name(text: str) -> str:
+    name_lines = [line for line in _frontmatter(text) if line.startswith("name: ")]
+    assert len(name_lines) == 1
+    return name_lines[0].split(":", 1)[1].strip()
 
 
 def test_bundled_lingneng_skill_root_exists():
@@ -50,8 +73,27 @@ def test_bundled_lingneng_skill_packages_are_present():
 def test_bundled_skill_directory_matches_frontmatter_name():
     for skill_file in _bundled_skill_files():
         text = skill_file.read_text(encoding="utf-8")
-        name_line = next(
-            line for line in text.splitlines() if line.startswith("name: ")
+        assert skill_file.parent.name == _frontmatter_name(text)
+
+
+def test_bundled_eval_json_files_are_present_and_tracked():
+    for relative_path in EXPECTED_EVAL_JSON_FILES:
+        path = LINGNENG_SKILLS_ROOT / relative_path
+        assert path.is_file()
+        subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(path.relative_to(REPO_ROOT))],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        package_name = name_line.split(":", 1)[1].strip()
-        assert skill_file.parent.name == package_name
+
+
+def test_bundled_skill_markdown_and_json_do_not_contain_local_absolute_paths():
+    leaked_path_markers = ("/Users/", "LingNengAI/app/skills")
+    for path in sorted(LINGNENG_SKILLS_ROOT.rglob("*")):
+        if path.suffix not in {".md", ".json"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in leaked_path_markers:
+            assert marker not in text, f"{marker} leaked in {path.relative_to(REPO_ROOT)}"

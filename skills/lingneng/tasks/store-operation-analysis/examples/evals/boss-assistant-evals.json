@@ -1,0 +1,109 @@
+{
+  "skill_name": "restaurant-boss-advisor",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "我把经营统计表发给你了，帮我整体看一下，有什么问题？附件：attachments/经营分析统计表-2026.xlsx",
+      "expected_output": "主动扫描全部Sheet，输出经营健康体检：用一句有冲击力的诊断性结论开篇（如\"经营结构失衡\"而非\"整体还可以\"），点出2月达成率35%的严重问题，分析固定成本压力，识别张爽2月疑似离职，给出优先级最高的3件事，结尾问用户想深入哪个方向。",
+      "files": ["attachments/经营分析统计表-2026.xlsx"],
+      "assertions": [
+        {
+          "name": "has-conclusion-section",
+          "description": "回答包含明确的结论部分（【结论】标题或等效的总体判断句）"
+        },
+        {
+          "name": "framing-is-diagnostic",
+          "description": "开篇用诊断性语言定性问题（如'经营结构失衡'而非'整体还可以'），有冲击力"
+        },
+        {
+          "name": "detects-zhang-shuang-departure",
+          "description": "主动识别张爽（员工105）2月起无薪资记录，标记为疑似离职或已确认离职"
+        },
+        {
+          "name": "flags-february-achievement-rate",
+          "description": "识别出2月营收达成率严重偏低（约35%，即70,967 vs 200,000预算），并标注为预警"
+        },
+        {
+          "name": "includes-labor-cost-analysis",
+          "description": "对人工成本占收入比进行分析，并与健康区间对比"
+        },
+        {
+          "name": "has-actionable-recommendations",
+          "description": "建议行动具体可执行，含数字，不是模糊建议如'优化成本'"
+        },
+        {
+          "name": "ends-with-open-question",
+          "description": "回答末尾问用户想深入哪个方向，而不是直接收尾"
+        },
+        {
+          "name": "has-structured-format",
+          "description": "回答有明确的结构分层（结论→问题拆解→建议行动 或等效结构），不是一大段流水账"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "我们上个月人工花了 8 万，贵不贵？",
+      "expected_output": "明确指出孤立数字无法判断，必须用人工成本率（人工÷营业额）来衡量。给出至少2个情景分析（不同营业额下占比差异悬殊），让老板理解为什么需要营业额。追问营业额，使用下划线格式，追问字段不超过4个，说明用途。",
+      "files": [],
+      "assertions": [
+        {
+          "name": "rejects-absolute-number-judgment",
+          "description": "明确指出不能孤立判断绝对数字，需要营业额数据才能得出人工成本率"
+        },
+        {
+          "name": "uses-scenario-analysis",
+          "description": "给出至少2个情景分析（不同营业额下人工占比的差异），让老板直观感受为何需要营业额数据"
+        },
+        {
+          "name": "asks-for-revenue",
+          "description": "明确追问了上月营业收入，因为这是判断人工占比的必要数据"
+        },
+        {
+          "name": "uses-underscore-format",
+          "description": "追问字段使用下划线格式（___）让用户填写，而不是普通问句列表"
+        },
+        {
+          "name": "max-four-fields",
+          "description": "一次追问的字段数量不超过4个"
+        },
+        {
+          "name": "explains-why-data-needed",
+          "description": "简短说明了为什么需要这些数据（如'为了计算人工占收入比'）"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "感觉 2 月份生意很差，亏了不少，到底哪里出了问题？要怎么搞？",
+      "expected_output": "用客流/翻台/客单/复购4个指标框架拆解亏损。区分行业共性（2月节后效应）和门店内部问题。给分阶段修复路线：止血（1周内调排班、缩SKU、控备货）→拉老客（2-3周沉默会员召回、工作日理由）。分析+策略连带输出，不转给其他员工。",
+      "files": [],
+      "assertions": [
+        {
+          "name": "does-not-deflect-to-other-agents",
+          "description": "不在回答之前把用户推给其他数字员工，而是自己承接这个问题"
+        },
+        {
+          "name": "provides-4-metric-framework",
+          "description": "使用客流/翻台率/客单价/复购率4个指标框架来拆解'亏损'的可能原因"
+        },
+        {
+          "name": "distinguishes-industry-vs-internal",
+          "description": "区分行业共性因素（2月节后效应）和门店内部经营问题"
+        },
+        {
+          "name": "gives-phased-plan",
+          "description": "给出分阶段修复方案（止血→拉老客 或等效的分步策略），而不是一次列出所有建议"
+        },
+        {
+          "name": "commits-to-analysis-plus-strategy",
+          "description": "明确表示会给出原因分析+策略建议，而不是只做诊断"
+        },
+        {
+          "name": "structured-followup-format",
+          "description": "追问使用结构化格式（下划线或清晰的分项列表），而不是随意的散句追问"
+        }
+      ]
+    }
+  ]
+}

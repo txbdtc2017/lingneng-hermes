@@ -211,9 +211,9 @@ def _coerce_rag_provider_payload(payload: Any) -> RagRetrieveResult:
         "context" in payload or "citations" in payload or "route_debug" in payload
     ):
         context = payload.get("context") if isinstance(payload.get("context"), str) else ""
-        citations = (
-            payload.get("citations") if isinstance(payload.get("citations"), list) else []
-        )
+        if "citations" in payload and not isinstance(payload.get("citations"), list):
+            raise ValueError("invalid RAG provider response")
+        citations = payload.get("citations", [])
         status: Literal["hit", "empty"] = "hit" if context or citations else "empty"
         metadata = (
             payload.get("route_debug")

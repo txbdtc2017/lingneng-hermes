@@ -488,6 +488,46 @@ def test_http_rag_provider_normalizes_old_lingneng_shape(tmp_path):
     assert result.metadata == {"retrieval_status": "hit"}
 
 
+def test_http_rag_provider_rejects_old_lingneng_invalid_citations(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "context": "旧服务上下文",
+                "citations": "not-a-list",
+                "route_debug": {"retrieval_status": "hit"},
+            },
+        )
+
+    provider = HttpRagProvider(
+        LingNengSettings.from_env(
+            {
+                "LINGNENG_RUNTIME_DIR": str(tmp_path),
+                "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve",
+            }
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.retrieve(
+        RagRetrieveRequest(
+            query="会员套餐",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            employee_type="marketing_content_creator",
+            conversation_id="conv-a",
+            session_key="session",
+            request_id="req-001",
+            top_k=3,
+            filters={},
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.code == "RAG_PROVIDER_INVALID_RESULT"
+
+
 def test_http_rag_provider_rejects_oversized_stream_without_buffering(tmp_path):
     class FakeStreamResponse:
         status_code = 200

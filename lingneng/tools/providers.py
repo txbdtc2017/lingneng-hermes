@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
+from typing import Any
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.chart_visualization import ChartVisualizationProvider
@@ -37,11 +39,13 @@ def build_web_search_provider(settings: LingNengSettings) -> WebSearchProvider |
         return None
     if not settings.bocha_web_search_api_key.strip():
         return None
-    try:
-        from lingneng.tools.web_search_provider import BochaWebSearchProvider
-    except Exception:
+    provider_class = _optional_provider_class(
+        "lingneng.tools.web_search_provider",
+        "BochaWebSearchProvider",
+    )
+    if provider_class is None:
         return None
-    return BochaWebSearchProvider(settings)
+    return provider_class(settings)
 
 
 def build_document_generation_provider(
@@ -51,11 +55,13 @@ def build_document_generation_provider(
         return None
     if not settings.document_provider_configured:
         return None
-    try:
-        from lingneng.tools.document_provider import JavaFileDocumentProvider
-    except Exception:
+    provider_class = _optional_provider_class(
+        "lingneng.tools.document_provider",
+        "JavaFileDocumentProvider",
+    )
+    if provider_class is None:
         return None
-    return JavaFileDocumentProvider.from_settings(settings)
+    return provider_class.from_settings(settings)
 
 
 def build_image_generation_provider(
@@ -63,11 +69,13 @@ def build_image_generation_provider(
 ) -> ImageGenerationProvider | None:
     if not settings.image_provider_configured:
         return None
-    try:
-        from lingneng.tools.image_provider import AigcImageGenerationProvider
-    except Exception:
+    provider_class = _optional_provider_class(
+        "lingneng.tools.image_provider",
+        "AigcImageGenerationProvider",
+    )
+    if provider_class is None:
         return None
-    return AigcImageGenerationProvider.from_settings(settings)
+    return provider_class.from_settings(settings)
 
 
 def build_chart_visualization_provider(
@@ -77,11 +85,23 @@ def build_chart_visualization_provider(
 ) -> ChartVisualizationProvider | None:
     if image_provider is None:
         return None
-    try:
-        from lingneng.tools.chart_provider import ChartImageGenerationProvider
-    except Exception:
+    provider_class = _optional_provider_class(
+        "lingneng.tools.chart_provider",
+        "ChartImageGenerationProvider",
+    )
+    if provider_class is None:
         return None
-    return ChartImageGenerationProvider(
+    return provider_class(
         settings=settings,
         image_provider=image_provider,
     )
+
+
+def _optional_provider_class(module_name: str, class_name: str) -> Any | None:
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == module_name:
+            return None
+        raise
+    return getattr(module, class_name)

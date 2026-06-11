@@ -1,7 +1,11 @@
+import pytest
+from pydantic import ValidationError
+
 from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
     Artifact,
     ArtifactCreatedEvent,
+    ComplianceBlockEvent,
     Citation,
     CitationDeltaEvent,
     ErrorEvent,
@@ -9,6 +13,10 @@ from lingneng.schemas.chat_events import (
     FORMAL_EVENT_NAMES,
     FinalEvent,
     RagContextEvent,
+    RouteCandidate,
+    RouteConfirmRequiredEvent,
+    RouteResultEvent,
+    RouteSuggestionEvent,
     RunStartedEvent,
 )
 
@@ -122,3 +130,110 @@ def test_artifact_event_payloads_dump_without_event_field():
     assert final.model_dump()["artifacts"][0]["artifact_id"] == "artifact-doc-1"
     assert "event" not in event.model_dump()
     assert "event" not in final.model_dump()
+
+
+def test_route_event_payloads_dump_without_event_field():
+    result = RouteResultEvent(
+        target_employee_type="marketing_content_creator",
+        confidence=0.91,
+        need_confirm=False,
+        is_current_employee=False,
+    )
+    suggestion = RouteSuggestionEvent(
+        current_employee_type="marketing_planner",
+        target_employee_type="marketing_content_creator",
+        confidence=0.88,
+        reason="需要生成可直接发布的营销内容",
+        reply="这个问题更适合由营销内容创作处理，我为你切换到对应数字员工。",
+    )
+    confirm = RouteConfirmRequiredEvent(
+        query="做一个营销活动",
+        candidates=[
+            RouteCandidate(
+                employee_type="marketing_planner",
+                confidence=0.62,
+                label="营销策划",
+                reason="需要活动方案",
+            ),
+            RouteCandidate(
+                employee_type="marketing_content_creator",
+                confidence=0.58,
+                label="营销内容创作",
+                reason="需要文案内容",
+            ),
+        ],
+        reply="这个问题可能需要不同数字员工处理，请选择一个方向。",
+    )
+    compliance = ComplianceBlockEvent(
+        risk_level="medium",
+        risk_categories=["policy"],
+        reply="该请求暂时无法处理。",
+    )
+
+    assert "event" not in result.model_dump()
+    assert "event" not in suggestion.model_dump()
+    assert "event" not in confirm.model_dump()
+    assert "event" not in compliance.model_dump()
+    result_json = result.model_dump(mode="json")
+    suggestion_json = suggestion.model_dump(mode="json")
+    confirm_json = confirm.model_dump(mode="json")
+    assert result_json["target_employee_type"] == (
+        "marketing_content_creator"
+    )
+    assert suggestion_json["current_employee_type"] == (
+        "marketing_planner"
+    )
+    assert confirm_json["candidates"][0]["employee_type"] == "marketing_planner"
+    assert confirm_json["candidates"][0]["label"] == "营销策划"
+
+
+@pytest.mark.parametrize("confidence", [-0.01, 1.01])
+def test_route_candidate_rejects_invalid_confidence(confidence):
+    with pytest.raises(ValidationError):
+        RouteCandidate(
+            employee_type="marketing_planner",
+            confidence=confidence,
+            label="营销策划",
+            reason="需要活动方案",
+        )
+
+
+@pytest.mark.parametrize("candidate_count", [0, 1, 5])
+def test_route_confirm_required_rejects_wrong_candidate_count(candidate_count):
+    candidates = [
+        RouteCandidate(
+            employee_type="marketing_planner",
+            confidence=0.6,
+            label="营销策划",
+            reason="需要活动方案",
+        )
+        for _ in range(candidate_count)
+    ]
+    with pytest.raises(ValidationError):
+        RouteConfirmRequiredEvent(
+            query="做一个营销活动",
+            candidates=candidates,
+            reply="请选择处理方向。",
+        )
+
+
+def test_route_confirm_required_rejects_duplicate_candidate_employee_types():
+    with pytest.raises(ValidationError):
+        RouteConfirmRequiredEvent(
+            query="做一个营销活动",
+            candidates=[
+                RouteCandidate(
+                    employee_type="marketing_planner",
+                    confidence=0.6,
+                    label="营销策划",
+                    reason="需要活动方案",
+                ),
+                RouteCandidate(
+                    employee_type="marketing_planner",
+                    confidence=0.5,
+                    label="营销策划",
+                    reason="仍然是活动方案",
+                ),
+            ],
+            reply="请选择处理方向。",
+        )

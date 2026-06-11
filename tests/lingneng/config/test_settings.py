@@ -136,6 +136,36 @@ def test_session_db_path_can_be_overridden(tmp_path):
     assert settings.session_db_path == tmp_path / "custom.sqlite3"
 
 
+def test_route_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+    direct_settings = LingNengSettings(runtime_dir=tmp_path / "direct-runtime")
+
+    assert settings.route_pending_db_path == tmp_path / "route_pending.sqlite3"
+    assert settings.route_pending_ttl_seconds == 600
+    assert settings.route_reason_max_chars == 300
+    assert settings.route_reply_max_chars == 500
+    assert direct_settings.route_pending_db_path == (
+        tmp_path / "direct-runtime" / "route_pending.sqlite3"
+    )
+
+
+def test_route_settings_from_env(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "LINGNENG_ROUTE_PENDING_DB_PATH": str(tmp_path / "route.sqlite3"),
+            "LINGNENG_ROUTE_PENDING_TTL_SECONDS": "120",
+            "LINGNENG_ROUTE_REASON_MAX_CHARS": "80",
+            "LINGNENG_ROUTE_REPLY_MAX_CHARS": "160",
+        }
+    )
+
+    assert settings.route_pending_db_path == tmp_path / "route.sqlite3"
+    assert settings.route_pending_ttl_seconds == 120
+    assert settings.route_reason_max_chars == 80
+    assert settings.route_reply_max_chars == 160
+
+
 def test_agent_mode_accepts_hermes():
     settings = LingNengSettings.from_env({"LINGNENG_AGENT_MODE": "hermes"})
 
@@ -291,6 +321,21 @@ def test_ready_summary_reports_phase_5_non_secret_counts(tmp_path):
     ],
 )
 def test_skill_and_rag_settings_reject_values_below_spec_minimums(
+    env_name, invalid_value
+):
+    with pytest.raises(ValidationError):
+        LingNengSettings.from_env({env_name: invalid_value})
+
+
+@pytest.mark.parametrize(
+    ("env_name", "invalid_value"),
+    [
+        ("LINGNENG_ROUTE_PENDING_TTL_SECONDS", "0"),
+        ("LINGNENG_ROUTE_REASON_MAX_CHARS", "19"),
+        ("LINGNENG_ROUTE_REPLY_MAX_CHARS", "19"),
+    ],
+)
+def test_route_settings_reject_values_below_spec_minimums(
     env_name, invalid_value
 ):
     with pytest.raises(ValidationError):

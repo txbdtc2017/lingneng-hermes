@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from lingneng.schemas.chat_request import EmployeeType
 
 
 FORMAL_EVENT_NAMES = [
@@ -50,6 +52,49 @@ class AgentStepEvent(LingNengEventModel):
     short_text: str
     summary: str | None = None
     refs: list[dict] = Field(default_factory=list)
+
+
+class RouteCandidate(LingNengEventModel):
+    employee_type: EmployeeType
+    confidence: float = Field(ge=0, le=1)
+    label: str
+    reason: str
+
+
+class RouteResultEvent(LingNengEventModel):
+    target_employee_type: EmployeeType
+    confidence: float = Field(ge=0, le=1)
+    need_confirm: bool
+    is_current_employee: bool
+
+
+class RouteSuggestionEvent(LingNengEventModel):
+    current_employee_type: EmployeeType
+    target_employee_type: EmployeeType
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+    reply: str
+
+
+class RouteConfirmRequiredEvent(LingNengEventModel):
+    query: str
+    candidates: list[RouteCandidate]
+    reply: str
+
+    @model_validator(mode="after")
+    def validate_candidate_count(self) -> "RouteConfirmRequiredEvent":
+        if len(self.candidates) < 2 or len(self.candidates) > 4:
+            raise ValueError("route confirmation requires 2 to 4 candidates")
+        employee_types = [candidate.employee_type for candidate in self.candidates]
+        if len(employee_types) != len(set(employee_types)):
+            raise ValueError("route confirmation candidates must be unique")
+        return self
+
+
+class ComplianceBlockEvent(LingNengEventModel):
+    risk_level: str
+    risk_categories: list[str]
+    reply: str
 
 
 class Citation(LingNengEventModel):

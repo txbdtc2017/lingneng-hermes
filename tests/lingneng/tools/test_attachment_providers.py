@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import lingneng.tools.attachment_http_provider as http_provider_module
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.attachment_http_provider import (
@@ -255,3 +256,173 @@ def test_http_attachment_provider_sanitizes_failures(tmp_path):
     assert "secret-token" not in dumped
     assert "traceback" not in dumped
     assert "/Users/rotas" not in dumped
+
+
+def test_http_attachment_provider_rejects_redirect_with_valid_json(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            302,
+            json={
+                "status": "succeeded",
+                "context_text": "must not be accepted",
+                "processed_count": 1,
+                "failed_count": 0,
+                "selected_count": 1,
+            },
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_ERROR"
+    assert result.context_text == ""
+
+
+def test_http_attachment_provider_maps_timeout_to_timeout_result(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        raise httpx.TimeoutException(
+            "secret-token traceback /Users/rotas/private",
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+    dumped = result.model_dump_json()
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_TIMEOUT"
+    assert "secret-token" not in dumped
+    assert "traceback" not in dumped
+    assert "/Users/rotas" not in dumped
+
+
+def test_http_attachment_provider_rejects_non_json_response(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, text="not json")
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
+    assert result.context_text == ""
+
+
+def test_http_attachment_provider_rejects_schema_invalid_json(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "status": "succeeded",
+                "context_text": "invalid",
+                "processed_count": -1,
+                "failed_count": 0,
+                "selected_count": 1,
+            },
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
+    assert result.context_text == ""
+
+
+def test_http_attachment_provider_default_client_disables_trust_env(
+    tmp_path,
+    monkeypatch,
+):
+    del tmp_path
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, *, timeout: float, trust_env: bool) -> None:
+            captured["timeout"] = timeout
+            captured["trust_env"] = trust_env
+
+        def __enter__(self) -> "FakeClient":
+            captured["entered"] = True
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            captured["exited"] = True
+
+        def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return httpx.Response(
+                200,
+                json={
+                    "status": "succeeded",
+                    "context_text": "ok",
+                    "processed_count": 1,
+                    "failed_count": 0,
+                    "selected_count": 1,
+                },
+            )
+
+    monkeypatch.setattr(http_provider_module.httpx, "Client", FakeClient)
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=7,
+        max_response_bytes=4096,
+    )
+
+    result = provider.process(attachment_request())
+
+    assert captured["timeout"] == 7
+    assert captured["trust_env"] is False
+    assert captured["entered"] is True
+    assert captured["exited"] is True
+    assert captured["url"] == "https://attachments.example/process"
+    assert captured["headers"]["Authorization"] == "Bearer secret-key"
+    assert result.status == "succeeded"

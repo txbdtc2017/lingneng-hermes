@@ -64,7 +64,7 @@ class HttpAttachmentProcessingProvider:
         content = response.content
         if len(content) > self.max_response_bytes:
             return _failure("ATTACHMENT_PROVIDER_INVALID_RESULT")
-        if response.is_error:
+        if response.status_code < 200 or response.status_code >= 300:
             return _failure("ATTACHMENT_PROVIDER_ERROR")
 
         try:

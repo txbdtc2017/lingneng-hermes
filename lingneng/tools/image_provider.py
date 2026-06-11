@@ -184,10 +184,13 @@ class RedisAigcResultStore:
     def from_settings(cls, settings: LingNengSettings) -> "RedisAigcResultStore":
         import redis
 
+        socket_timeout = _redis_socket_timeout(settings)
         return cls(
             redis_client=redis.Redis.from_url(
                 settings.aigc_redis_url,
                 decode_responses=True,
+                socket_connect_timeout=socket_timeout,
+                socket_timeout=socket_timeout,
             ),
             key_prefix=settings.aigc_redis_key_prefix,
         )
@@ -283,7 +286,7 @@ class AigcImageGenerationProvider:
                     timeout_seconds=self.settings.aigc_result_wait_timeout_seconds,
                     poll_interval_seconds=self.settings.aigc_result_poll_interval_seconds,
                 )
-            except Exception:
+            except AigcImageProviderError:
                 failed_count += 1
                 continue
 
@@ -417,6 +420,14 @@ def _artifacts_from_task_result(
 
 def _normalize_count(value: int, settings: LingNengSettings) -> int:
     return min(max(1, int(value or 1)), max(1, settings.image_max_count))
+
+
+def _redis_socket_timeout(settings: LingNengSettings) -> float:
+    return min(
+        max(settings.aigc_result_poll_interval_seconds, 0.1),
+        settings.aigc_result_wait_timeout_seconds,
+        5.0,
+    )
 
 
 def _safe_id_segment(value: str) -> str:

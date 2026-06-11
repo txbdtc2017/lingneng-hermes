@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.document_generation import DocumentGenerationRequest
@@ -460,6 +461,7 @@ def test_aigc_image_provider_returns_partial_success_artifacts(tmp_path):
     from lingneng.tools.image_generation import ImageGenerationRequest
     from lingneng.tools.image_provider import (
         AigcImageGenerationProvider,
+        AigcImageProviderError,
         AigcMaterialTaskResult,
     )
 
@@ -488,12 +490,7 @@ def test_aigc_image_provider_returns_partial_success_artifacts(tmp_path):
                     task_type="IMAGE",
                     material_urls=["https://files.example/generated.png"],
                 )
-            return AigcMaterialTaskResult(
-                task_id=task_id,
-                status="error",
-                task_type="IMAGE",
-                msg="failed",
-            )
+            raise AigcImageProviderError("aigc task failed")
 
     fake_client = FakeClient()
     provider = AigcImageGenerationProvider(
@@ -516,6 +513,177 @@ def test_aigc_image_provider_returns_partial_success_artifacts(tmp_path):
     assert result.safe_output["requested_count"] == 2
     assert result.safe_output["succeeded_count"] == 1
     assert result.safe_output["failed_count"] == 1
+
+
+def test_redis_aigc_result_store_from_settings_sets_socket_timeouts(
+    tmp_path,
+    monkeypatch,
+):
+    import redis
+
+    from lingneng.tools.image_provider import RedisAigcResultStore
+
+    captured: dict[str, object] = {}
+    redis_client = object()
+
+    def fake_from_url(cls, url: str, **kwargs):
+        del cls
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return redis_client
+
+    monkeypatch.setattr(redis.Redis, "from_url", classmethod(fake_from_url))
+
+    store = RedisAigcResultStore.from_settings(
+        settings(
+            tmp_path,
+            LINGNENG_AIGC_REDIS_URL="redis://redis.example/0",
+            LINGNENG_AIGC_REDIS_KEY_PREFIX="biz",
+            LINGNENG_AIGC_RESULT_POLL_INTERVAL_SECONDS="2.0",
+            LINGNENG_AIGC_RESULT_WAIT_TIMEOUT_SECONDS="10.0",
+        )
+    )
+
+    assert store.redis_client is redis_client
+    assert captured["url"] == "redis://redis.example/0"
+    assert captured["kwargs"] == {
+        "decode_responses": True,
+        "socket_connect_timeout": 2.0,
+        "socket_timeout": 2.0,
+    }
+
+
+def test_redis_aigc_result_store_rejects_malformed_json():
+    from lingneng.tools.image_provider import (
+        AigcImageProviderError,
+        RedisAigcResultStore,
+    )
+
+    class FakeRedis:
+        def get(self, key: str) -> str:
+            assert key == "prefix:aigc:image_task:task-bad"
+            return "{not-json"
+
+    store = RedisAigcResultStore(redis_client=FakeRedis(), key_prefix="prefix")
+
+    with pytest.raises(AigcImageProviderError):
+        store.get("task-bad")
+
+
+def test_redis_aigc_result_store_pending_result_times_out(monkeypatch):
+    from lingneng.tools import image_provider
+    from lingneng.tools.image_provider import (
+        AigcImageProviderError,
+        RedisAigcResultStore,
+    )
+
+    class FakeRedis:
+        def get(self, key: str) -> str:
+            del key
+            return json.dumps(
+                {
+                    "task_id": "task-pending",
+                    "status": "pending",
+                    "task_type": "IMAGE",
+                    "material_urls": [],
+                }
+            )
+
+    sleeps: list[float] = []
+    monotonic_values = iter([0.0, 0.0, 0.2])
+    monkeypatch.setattr(image_provider.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(image_provider.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = RedisAigcResultStore(redis_client=FakeRedis(), key_prefix="prefix")
+
+    with pytest.raises(AigcImageProviderError):
+        store.wait(
+            "task-pending",
+            timeout_seconds=0.1,
+            poll_interval_seconds=0.5,
+        )
+
+    assert sleeps == [0.1]
+
+
+def test_image_generation_handler_sanitizes_aigc_provider_errors(tmp_path):
+    from lingneng.tools.image_generation import (
+        image_generation_context,
+        image_generation_handler,
+    )
+    from lingneng.tools.image_provider import AigcImageProviderError
+
+    class LeakyProvider:
+        def generate(self, request):
+            del request
+            raise AigcImageProviderError(
+                "secret-token traceback /Users/rotas/private.png"
+            )
+
+    with image_generation_context(settings(tmp_path), provider=LeakyProvider()):
+        result = json.loads(image_generation_handler({"prompt": "生成海报"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is False
+    assert result["code"] == "IMAGE_GENERATION_PROVIDER_ERROR"
+    assert "secret-token" not in dumped
+    assert "traceback" not in dumped
+    assert "/Users/rotas" not in dumped
+
+
+def test_aigc_image_provider_does_not_swallow_non_provider_exceptions(tmp_path):
+    from lingneng.tools.image_generation import (
+        image_generation_context,
+        image_generation_handler,
+    )
+    from lingneng.tools.image_provider import (
+        AigcImageGenerationProvider,
+        AigcMaterialTaskResult,
+    )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def submit_text_to_image(self, *, prompt: str, size: str, quality: str) -> str:
+            del prompt, size, quality
+            self.calls += 1
+            if self.calls == 1:
+                return "task-ok"
+            raise RuntimeError("programmer bug secret-token")
+
+    class FakeStore:
+        def wait(
+            self,
+            task_id: str,
+            *,
+            timeout_seconds: float,
+            poll_interval_seconds: float,
+        ) -> AigcMaterialTaskResult:
+            del timeout_seconds, poll_interval_seconds
+            return AigcMaterialTaskResult(
+                task_id=task_id,
+                status="success",
+                task_type="IMAGE",
+                material_urls=["https://files.example/generated.png"],
+            )
+
+    provider = AigcImageGenerationProvider(
+        settings(tmp_path),
+        client=FakeClient(),
+        result_store=FakeStore(),
+    )
+
+    with image_generation_context(settings(tmp_path), provider=provider):
+        result = json.loads(
+            image_generation_handler({"prompt": "生成海报", "count": 2})
+        )
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is False
+    assert result["code"] == "IMAGE_GENERATION_PROVIDER_ERROR"
+    assert result["artifacts"] == []
+    assert "programmer bug" not in dumped
+    assert "secret-token" not in dumped
 
 
 def test_chart_provider_delegates_to_image_provider_and_rewrites_source(tmp_path):

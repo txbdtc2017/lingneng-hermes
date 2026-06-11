@@ -109,24 +109,124 @@ _PUBLIC_FAILURE_CODES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class _HttpRagResponse:
+    status_code: int
+    content: bytes = b""
+    exceeded_size: bool = False
+
+
 class HttpRagProvider:
-    def __init__(self, settings: LingNengSettings) -> None:
+    def __init__(
+        self,
+        settings: LingNengSettings,
+        *,
+        http_client: Any | None = None,
+    ) -> None:
         self._settings = settings
+        self._http_client = http_client
 
     def retrieve(self, request: RagRetrieveRequest) -> RagRetrieveResult:
+        try:
+            response = self._post(request.model_dump())
+        except httpx.TimeoutException:
+            return _provider_failure("RAG_PROVIDER_TIMEOUT")
+        except Exception:
+            return _provider_failure("RAG_PROVIDER_ERROR")
+
+        if response.exceeded_size:
+            return _provider_failure("RAG_PROVIDER_INVALID_RESULT")
+        if response.status_code < 200 or response.status_code >= 300:
+            return _provider_failure("RAG_PROVIDER_ERROR")
+
+        try:
+            payload = json.loads(response.content.decode("utf-8"))
+            return _coerce_rag_provider_payload(payload)
+        except Exception:
+            return _provider_failure("RAG_PROVIDER_INVALID_RESULT")
+
+    def _post(self, payload: dict[str, Any]) -> _HttpRagResponse:
+        if self._http_client is not None:
+            return self._post_with_client(self._http_client, payload)
+
+        with httpx.Client(
+            timeout=self._settings.rag_timeout_seconds,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            return self._post_with_client(client, payload)
+
+    def _post_with_client(
+        self,
+        client: Any,
+        payload: dict[str, Any],
+    ) -> _HttpRagResponse:
         headers = (
             {"Authorization": f"Bearer {self._settings.rag_api_key}"}
             if self._settings.rag_api_key
             else {}
         )
-        with httpx.Client(timeout=self._settings.rag_timeout_seconds) as client:
-            response = client.post(
-                self._settings.rag_endpoint,
-                json=request.model_dump(),
-                headers=headers,
+        with client.stream(
+            "POST",
+            self._settings.rag_endpoint,
+            json=payload,
+            headers=headers,
+            timeout=self._settings.rag_timeout_seconds,
+        ) as response:
+            status_code = int(response.status_code)
+            if status_code < 200 or status_code >= 300:
+                return _HttpRagResponse(status_code=status_code)
+
+            chunks: list[bytes] = []
+            total_size = 0
+            max_size = self._settings.rag_http_max_response_bytes
+            chunk_size = min(65536, max_size + 1)
+            for chunk in response.iter_bytes(chunk_size=chunk_size):
+                next_size = total_size + len(chunk)
+                if next_size > max_size:
+                    return _HttpRagResponse(
+                        status_code=status_code,
+                        exceeded_size=True,
+                    )
+                chunks.append(chunk)
+                total_size = next_size
+
+            return _HttpRagResponse(
+                status_code=status_code,
+                content=b"".join(chunks),
             )
-            response.raise_for_status()
-            return RagRetrieveResult.model_validate(response.json())
+
+
+def _provider_failure(code: str) -> RagRetrieveResult:
+    return RagRetrieveResult(
+        status="failed",
+        code=_public_failure_code(code, default="RAG_PROVIDER_ERROR"),
+    )
+
+
+def _coerce_rag_provider_payload(payload: Any) -> RagRetrieveResult:
+    if isinstance(payload, dict) and "status" in payload:
+        return RagRetrieveResult.model_validate(payload)
+    if isinstance(payload, dict) and (
+        "context" in payload or "citations" in payload or "route_debug" in payload
+    ):
+        context = payload.get("context") if isinstance(payload.get("context"), str) else ""
+        citations = (
+            payload.get("citations") if isinstance(payload.get("citations"), list) else []
+        )
+        status: Literal["hit", "empty"] = "hit" if context or citations else "empty"
+        metadata = (
+            payload.get("route_debug")
+            if isinstance(payload.get("route_debug"), dict)
+            else {}
+        )
+        return RagRetrieveResult(
+            status=status,
+            context=context,
+            citations=citations,
+            metadata=metadata,
+        )
+    raise ValueError("invalid RAG provider response")
 
 
 def build_rag_request_context(

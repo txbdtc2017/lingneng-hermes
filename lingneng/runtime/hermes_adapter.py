@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from run_agent import AIAgent
 
@@ -176,6 +176,8 @@ def _resolved_agent_runtime_kwargs() -> dict[str, Any]:
 def _build_route_pending_store(
     settings: LingNengSettings,
 ) -> LingNengRoutePendingStore | None:
+    if settings.route_pending_db_path is None:
+        return None
     try:
         return LingNengRoutePendingStore(
             settings.route_pending_db_path,
@@ -339,7 +341,10 @@ class HermesAgentRunAdapter:
                     )
                     if next_route_trace is not None:
                         route_trace = next_route_trace
-                    events = [event, *artifact_events, *rag_events, *route_events]
+                    events = cast(
+                        list[LingNengStreamEvent],
+                        [event, *artifact_events, *rag_events, *route_events],
+                    )
                     if is_artifact_producing_tool(tool_name):
                         active_artifact_tools = max(0, active_artifact_tools - 1)
                         if active_artifact_tools == 0 and buffered_answer_events:
@@ -437,7 +442,7 @@ class HermesAgentRunAdapter:
                         )
                         with rag_request_context(
                             rag_context,
-                            provider=_build_rag_provider(self.settings),
+                            provider=_safe_build_rag_provider(self.settings),
                         ):
                             result = agent.run_conversation(
                                 request.query.content,
@@ -546,6 +551,16 @@ def _build_rag_provider(settings: LingNengSettings) -> HttpRagProvider | None:
     if not settings.rag_endpoint.strip():
         return None
     return HttpRagProvider(settings)
+
+
+def _safe_build_rag_provider(settings: LingNengSettings) -> HttpRagProvider | None:
+    try:
+        return _build_rag_provider(settings)
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng RAG provider construction failed; provider disabled."
+        )
+        return None
 
 
 def _build_time_context(

@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -542,7 +543,9 @@ async def test_hermes_adapter_constructs_agent_with_business_tool_context(
     assert kwargs["skip_context_files"] is True
     assert kwargs["skip_memory"] is True
     assert kwargs["session_db"].db_path == tmp_path / "sessions.sqlite3"
-    assert events[-1].answer == "完成"
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
+    assert final.answer == "完成"
 
 
 @pytest.mark.asyncio
@@ -775,6 +778,45 @@ async def test_hermes_adapter_attachment_provider_build_failure_is_fail_closed(
 
 
 @pytest.mark.asyncio
+async def test_hermes_adapter_rag_provider_build_failure_is_fail_closed(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    endpoint = "https://rag.example.test/retrieve?token=url-token"
+
+    def fail_build(settings):
+        del settings
+        raise RuntimeError("secret-rag-key /Users/rotas/private")
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "_build_rag_provider",
+        fail_build,
+    )
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_RAG_ENDPOINT=endpoint,
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    assert "RAG provider construction failed" in caplog.text
+    assert "secret-rag-key" not in caplog.text
+    assert "/Users/rotas" not in caplog.text
+    assert endpoint not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_attachment_context_uses_untrusted_prompt_section(tmp_path, monkeypatch):
     payload = full_payload()
     payload["attachments"] = [
@@ -843,7 +885,9 @@ async def test_disabling_time_context_keeps_other_ephemeral_guidance(tmp_path):
     prompt = effective_system_prompt()
     assert TRUSTED_RUNTIME_CONTEXT_HEADING not in prompt
     assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING in prompt
-    assert "time_context" not in events[-1].trace_summary
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
+    assert "time_context" not in final.trace_summary
 
 
 @pytest.mark.asyncio
@@ -873,9 +917,10 @@ async def test_disabled_time_context_does_not_construct_default_service(
 
     events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
-    assert isinstance(events[-1], FinalEvent)
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
     assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
-    assert "time_context" not in events[-1].trace_summary
+    assert "time_context" not in final.trace_summary
 
 
 @pytest.mark.asyncio
@@ -889,16 +934,17 @@ async def test_time_context_service_failure_is_safely_omitted(
     adapter = HermesAgentRunAdapter(
         settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
         agent_cls=RecordingSystemPromptAgent,
-        time_context_service=RaisingTimeContextService(),
+        time_context_service=cast(Any, RaisingTimeContextService()),
     )
 
     with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
         events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
-    assert isinstance(events[-1], FinalEvent)
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
     assert RaisingTimeContextService.calls == 1
     assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
-    assert "time_context" not in events[-1].trace_summary
+    assert "time_context" not in final.trace_summary
     assert "time context unavailable" in caplog.text
     assert "private calendar failure" not in caplog.text
     assert "/Users/rotas/private" not in caplog.text
@@ -914,15 +960,16 @@ async def test_time_context_prompt_failure_is_safely_omitted(
     adapter = HermesAgentRunAdapter(
         settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
         agent_cls=RecordingSystemPromptAgent,
-        time_context_service=PromptRaisingTimeContextService(),
+        time_context_service=cast(Any, PromptRaisingTimeContextService()),
     )
 
     with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
         events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
-    assert isinstance(events[-1], FinalEvent)
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
     assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
-    assert "time_context" not in events[-1].trace_summary
+    assert "time_context" not in final.trace_summary
     assert "time context prompt unavailable" in caplog.text
     assert "private prompt failure" not in caplog.text
     assert "/Users/rotas/private" not in caplog.text
@@ -936,7 +983,7 @@ async def test_time_context_is_built_once_per_request_and_refreshed(tmp_path):
     adapter = HermesAgentRunAdapter(
         settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
         agent_cls=RecordingSystemPromptAgent,
-        time_context_service=service,
+        time_context_service=cast(Any, service),
     )
 
     [event async for event in adapter.stream(request, resolved, "run-1")]
@@ -1071,9 +1118,9 @@ async def test_attachment_context_is_not_persisted_in_session_system_prompt(
     )
 
     [event async for event in adapter.stream(request, resolved, "run-1")]
-    stored_prompt = adapter.session_store.db.get_session(resolved.session_key)[
-        "system_prompt"
-    ]
+    stored_session = adapter.session_store.db.get_session(resolved.session_key)
+    assert stored_session is not None
+    stored_prompt = stored_session["system_prompt"]
     [event async for event in adapter.stream(second_request, resolved, "run-2")]
     second_prompt = effective_system_prompt(PersistingSystemPromptAgent)
 
@@ -1208,7 +1255,7 @@ async def test_attachment_started_step_streams_before_provider_finishes(
         raising=False,
     )
 
-    stream = adapter.stream(request, resolved, "run-1")
+    stream = cast(Any, adapter.stream(request, resolved, "run-1"))
     try:
         await anext(stream)
         started_event = await asyncio.wait_for(anext(stream), timeout=0.25)
@@ -1391,6 +1438,7 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
 
     agent = adapter._last_agent_for_tests
     kwargs = CapturingAgent.calls[0]
+    assert agent is not None
     assert agent.run_args["user_message"] == request.query.content
     assert agent.run_args["system_message"].startswith(request.system_prompt.content)
     assert (
@@ -1561,6 +1609,7 @@ async def test_hermes_adapter_installs_lingneng_activity_tracker(tmp_path):
     [event async for event in adapter.stream(request, resolved, "run-1")]
 
     agent = adapter._last_agent_for_tests
+    assert agent is not None
     assert agent._last_activity_desc == "probe"
     assert agent._last_activity_ts > 0.0
 

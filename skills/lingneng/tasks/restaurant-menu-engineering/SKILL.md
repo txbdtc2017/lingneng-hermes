@@ -20,6 +20,10 @@ metadata:
       - chart-visualization
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [菜品, 菜单, SKU, 卖得好不好, 销量, 毛利, 爆款, 上新, 下架, 该砍]
 ---
 

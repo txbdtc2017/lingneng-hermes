@@ -21,6 +21,10 @@ metadata:
     recommended_capabilities:
       - chart-visualization
       - report-formatting
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: []
 ---
 

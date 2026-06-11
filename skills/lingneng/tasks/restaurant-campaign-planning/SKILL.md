@@ -22,6 +22,10 @@ metadata:
       - chart-visualization
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [营销活动, 活动策划, 节日活动, 营销日历, 五一, 端午, 中秋, 国庆, 主题方案]
 ---
 

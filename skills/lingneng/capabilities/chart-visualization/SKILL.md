@@ -17,6 +17,10 @@ metadata:
       - chart_visualization
     supporting_skills:
       - artifact-output-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 ---
 
 ## Capability Scope

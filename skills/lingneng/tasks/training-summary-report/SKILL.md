@@ -21,6 +21,10 @@ metadata:
       - document-generation
       - report-formatting
       - artifact-output-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [培训总结, 培训纪要, 学习报告, 会议总结]
 ---
 

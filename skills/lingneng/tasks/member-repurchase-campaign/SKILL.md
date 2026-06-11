@@ -21,6 +21,10 @@ metadata:
       - document-generation
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [会员复购, 沉睡会员, 会员召回, RFM, VIP召回, 新客培育, 会员分层, 分层权益, 储值会员]
 ---
 

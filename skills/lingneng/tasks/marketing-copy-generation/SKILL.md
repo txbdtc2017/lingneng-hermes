@@ -23,6 +23,10 @@ metadata:
       - image-generation
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [营销文案, 小红书种草文, 抖音脚本, 视频号脚本, 社群话术, 朋友圈文案, 海报标语, 公众号推文, 美团活动页, 大众点评活动页, 评价回复, 差评回复, KOL Brief, 新用户入会引导, 裂变分享话术, 探店文案, 探店脚本, 达人探店脚本]
 ---
 

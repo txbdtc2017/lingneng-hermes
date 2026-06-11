@@ -21,6 +21,10 @@ metadata:
       - chart-visualization
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [套餐, 搭配, 定价, 涨价, 降价, 满减, 赠品, 促销, 价格]
 ---
 

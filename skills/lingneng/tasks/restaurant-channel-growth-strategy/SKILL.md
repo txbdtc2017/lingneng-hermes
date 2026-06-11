@@ -23,6 +23,10 @@ metadata:
       - document-generation
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [拉新, 引流, 获客, 竞品, 对手, KOL合作, 达人合作, 达人筛选, KOL投放, 大众点评, 美团, 抖音, 小红书, 裂变, 老带新, ROI]
 ---
 

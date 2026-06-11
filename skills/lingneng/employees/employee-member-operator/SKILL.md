@@ -20,6 +20,10 @@ metadata:
     recommended_capabilities:
       - document-generation
       - report-formatting
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: []
 ---
 

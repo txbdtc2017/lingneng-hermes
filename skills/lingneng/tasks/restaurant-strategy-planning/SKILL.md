@@ -22,6 +22,10 @@ metadata:
       - document-generation
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [目标, 计划, 路线图, 增长, 进度, 完成率, 预算达成率, 差距, 差多少, 怎么追, 复盘, 季度, 年度, 规划, 策略, 达到多少, 怎么实现]
 ---
 

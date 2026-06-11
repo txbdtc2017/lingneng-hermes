@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.skills.catalog import LingNengSkillCatalog, bundled_lingneng_skill_root
@@ -67,6 +68,12 @@ def _frontmatter_name(text: str) -> str:
     return name_lines[0].split(":", 1)[1].strip()
 
 
+def _frontmatter_data(text: str) -> dict:
+    data = yaml.safe_load("\n".join(_frontmatter(text)))
+    assert isinstance(data, dict)
+    return data
+
+
 def _settings(tmp_path: Path, **overrides: str) -> LingNengSettings:
     env = {
         "LINGNENG_APP_ENV": "test",
@@ -89,6 +96,18 @@ def test_bundled_skill_directory_matches_frontmatter_name():
     for skill_file in _bundled_skill_files():
         text = skill_file.read_text(encoding="utf-8")
         assert skill_file.parent.name == _frontmatter_name(text)
+
+
+def test_bundled_skill_frontmatter_declares_hermes_metadata():
+    for skill_file in _bundled_skill_files():
+        data = _frontmatter_data(skill_file.read_text(encoding="utf-8"))
+        metadata = data.get("metadata")
+        assert isinstance(metadata, dict), skill_file
+        hermes = metadata.get("hermes")
+        assert isinstance(hermes, dict), skill_file
+        assert "lingneng" in hermes.get("tags", []), skill_file
+        assert "lingneng" in hermes.get("fallback_for_toolsets", []), skill_file
+        assert "read_skill" in hermes.get("requires_tools", []), skill_file
 
 
 def test_bundled_eval_json_files_are_present_and_tracked():
@@ -144,6 +163,22 @@ def test_catalog_configured_root_overrides_bundled_package(tmp_path):
 
     assert package is not None
     assert "OVERRIDE BODY" in package.body
+
+
+def test_catalog_default_list_includes_all_bundled_skill_kinds_in_order(tmp_path):
+    catalog = LingNengSkillCatalog(_settings(tmp_path))
+
+    items = catalog.list_skills(limit=50)
+
+    names = [item.package_name for item in items]
+    assert len(items) == 24
+    assert set(names) == REQUIRED_PACKAGES
+    assert "artifact-output-contract" in names
+    assert "business-answer-contract" in names
+    assert [item.kind.value for item in items] == sorted(
+        [item.kind.value for item in items],
+        key=["employee_base", "task", "capability", "infrastructure"].index,
+    )
 
 
 def test_catalog_list_filters_by_kind_and_employee_type(tmp_path):

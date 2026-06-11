@@ -104,6 +104,24 @@ def test_search_skills_handler_matches_chinese_copy_query(tmp_path):
     assert_no_private_output(result)
 
 
+def test_search_skills_handler_rejects_overlong_query_before_catalog(tmp_path):
+    overlong_query = "营" * 501
+
+    with skill_tool_context(settings(tmp_path)):
+        overlong_result = loads_tool_result(
+            search_skills_handler({"query": overlong_query})
+        )
+        normal_result = loads_tool_result(search_skills_handler({"query": "营销"}))
+
+    assert_public_result_shape(overlong_result, tool_name="search_skills")
+    assert overlong_result["success"] is False
+    assert overlong_result["code"] == "INVALID_ARGUMENT"
+    assert_no_private_output(overlong_result)
+    assert_public_result_shape(normal_result, tool_name="search_skills")
+    assert normal_result["success"] is True
+    assert_no_private_output(normal_result)
+
+
 def test_read_skill_handler_returns_bounded_body_and_resource_manifest(tmp_path):
     with skill_tool_context(settings(tmp_path)):
         result = loads_tool_result(

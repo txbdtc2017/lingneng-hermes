@@ -23,6 +23,10 @@ metadata:
       - document-generation
       - report-formatting
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [经营分析, 人工成本, 生意差, 亏损, 预算达成异常, 人员异常, 成本过高, 门店分析, 客流下降, 毛利分析]
 ---
 

@@ -12,6 +12,10 @@ metadata:
     script_policy: metadata_only
     tags: [infrastructure, artifact]
     domains: [platform]
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 ---
 
 ## Applies To

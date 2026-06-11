@@ -24,6 +24,10 @@ metadata:
     supporting_skills:
       - rag-citation-contract
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 triggers: [知识库, 怎么规定, SOP, 资料里]
 ---
 

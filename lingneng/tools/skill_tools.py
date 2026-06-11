@@ -70,6 +70,7 @@ _PUBLIC_MESSAGE_BY_CODE = {
 }
 _MAX_PUBLIC_DEPTH = 6
 _MAX_PUBLIC_ITEMS = 100
+SEARCH_SKILLS_QUERY_MAX_CHARS = 500
 
 
 @contextmanager
@@ -143,6 +144,8 @@ def search_skills_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> 
 
     query = _required_text_arg(raw_args.get("query"))
     if query is None:
+        return _failure("search_skills", "INVALID_ARGUMENT")
+    if len(query) > SEARCH_SKILLS_QUERY_MAX_CHARS:
         return _failure("search_skills", "INVALID_ARGUMENT")
     employee_type, employee_type_error = _optional_text_arg(
         raw_args.get("employee_type")

@@ -15,6 +15,10 @@ metadata:
     capability_name: report_formatting
     supporting_skills:
       - business-answer-contract
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 ---
 
 ## Capability Scope

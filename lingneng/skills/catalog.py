@@ -91,7 +91,7 @@ class LingNengSkillCatalog:
         self,
         kind: str | SkillKind | None = None,
         employee_type: str | None = None,
-        include_infrastructure: bool = False,
+        include_infrastructure: bool = True,
         limit: int | None = None,
     ) -> list[SkillCatalogItem]:
         items = [

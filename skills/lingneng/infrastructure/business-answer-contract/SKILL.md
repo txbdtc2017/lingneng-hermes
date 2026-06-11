@@ -12,6 +12,10 @@ metadata:
     script_policy: metadata_only
     tags: [infrastructure, business]
     domains: [restaurant]
+  hermes:
+    tags: [lingneng]
+    requires_tools: [read_skill]
+    fallback_for_toolsets: [lingneng]
 ---
 
 ## Applies To

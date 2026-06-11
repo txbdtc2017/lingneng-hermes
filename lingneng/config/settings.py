@@ -94,6 +94,12 @@ class LingNengSettings(BaseModel):
     attachment_max_image_bytes: int = Field(default=10485760, ge=0)
     attachment_timeout_seconds: float = Field(default=30.0, ge=0.1)
     attachment_context_max_chars: int = Field(default=6000, ge=500)
+    time_context_enabled: bool = True
+    time_context_default_timezone: str = "Asia/Shanghai"
+    time_context_default_region: str = "CN"
+    time_context_max_events: int = Field(default=5, ge=0)
+    time_context_prompt_max_chars: int = Field(default=3000, ge=500)
+    prompt_section_max_chars: int = Field(default=8000, ge=500)
 
     @model_validator(mode="after")
     def _default_storage_paths(self) -> "LingNengSettings":
@@ -214,6 +220,24 @@ class LingNengSettings(BaseModel):
             attachment_context_max_chars=int(
                 source.get("LINGNENG_ATTACHMENT_CONTEXT_MAX_CHARS", "6000")
             ),
+            time_context_enabled=_bool_from_env(
+                source.get("LINGNENG_TIME_CONTEXT_ENABLED"), True
+            ),
+            time_context_default_timezone=source.get(
+                "LINGNENG_TIME_CONTEXT_DEFAULT_TIMEZONE", "Asia/Shanghai"
+            ),
+            time_context_default_region=source.get(
+                "LINGNENG_TIME_CONTEXT_DEFAULT_REGION", "CN"
+            ),
+            time_context_max_events=int(
+                source.get("LINGNENG_TIME_CONTEXT_MAX_EVENTS", "5")
+            ),
+            time_context_prompt_max_chars=int(
+                source.get("LINGNENG_TIME_CONTEXT_PROMPT_MAX_CHARS", "3000")
+            ),
+            prompt_section_max_chars=int(
+                source.get("LINGNENG_PROMPT_SECTION_MAX_CHARS", "8000")
+            ),
         )
 
     @property
@@ -245,4 +269,5 @@ class LingNengSettings(BaseModel):
             "rag_configured": bool(self.rag_endpoint),
             "artifact_url_allow_list_count": len(self.artifact_url_allowed_hosts),
             "attachment_host_allow_list_count": len(self.attachment_allowed_hosts),
+            "time_context_enabled": self.time_context_enabled,
         }

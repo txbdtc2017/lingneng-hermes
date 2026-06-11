@@ -78,6 +78,21 @@ def test_manifest_includes_bundled_skills():
     assert "graft optional-skills" in manifest
 
 
+def test_lingneng_calendar_ships_in_both_wheel_and_sdist():
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lingneng_pkg_data = data["tool"]["setuptools"]["package-data"].get("lingneng", [])
+    assert "context/*.yaml" in lingneng_pkg_data, (
+        "pyproject package-data 'lingneng' must ship context/*.yaml so "
+        "FestivalCalendarRepository works from wheel installs"
+    )
+
+    manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    assert "recursive-include lingneng/context *.yaml" in manifest, (
+        "MANIFEST.in must include lingneng/context/*.yaml so the sdist ships "
+        "the bundled LingNeng calendar"
+    )
+
+
 def test_bundled_plugin_manifests_ship_in_both_wheel_and_sdist():
     """Regression test for #34034 / #28149.
 

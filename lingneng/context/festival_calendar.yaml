@@ -1,0 +1,66 @@
+regions:
+  CN:
+    events:
+      - id: childrens_day
+        name: 儿童节
+        category: public_holiday
+        calendar: solar
+        month: 6
+        day: 1
+        marketing_hint: 适合亲子场景、儿童礼品、家庭客群和童趣互动内容。
+        marketing_tier: A
+        heat_score: 4
+        business_type: 家庭亲子
+        marketing_focus: 儿童套餐
+        suitable_employee_types:
+          - marketing_planner
+          - product_combo_advisor
+          - member_operator
+      - id: internet_618
+        name: "618"
+        category: internet_culture
+        calendar: solar
+        month: 6
+        day: 18
+        marketing_hint: 适合年中促销、爆品组合、会员唤醒和限时活动。
+        marketing_tier: S
+        heat_score: 5
+        business_type: 年中大促
+        marketing_focus: 限时促销
+        suitable_employee_types:
+          - marketing_planner
+          - product_combo_advisor
+          - member_operator
+      - id: dragon_boat_festival
+        name: 端午节
+        category: traditional_festival
+        calendar: explicit_date
+        dates:
+          - "2026-06-19"
+          - "2027-06-09"
+        marketing_hint: 适合传统文化、粽子礼盒、员工福利和会员关怀内容。
+        marketing_tier: S
+        heat_score: 5
+        business_type: 传统节日
+        marketing_focus: 端午礼盒
+        suitable_employee_types:
+          - marketing_planner
+          - product_combo_advisor
+          - member_operator
+          - boss_assistant
+      - id: fathers_day
+        name: 父亲节
+        category: western_festival
+        calendar: solar_nth_weekday
+        month: 6
+        nth: 3
+        weekday: 7
+        marketing_hint: 适合亲情营销、礼品推荐、家庭聚餐和会员关怀内容。
+        marketing_tier: A
+        heat_score: 4
+        business_type: 家庭消费
+        marketing_focus: 父亲节套餐
+        suitable_employee_types:
+          - marketing_planner
+          - product_combo_advisor
+          - member_operator

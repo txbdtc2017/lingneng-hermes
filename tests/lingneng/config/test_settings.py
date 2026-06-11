@@ -226,6 +226,39 @@ def test_phase_5_artifact_generation_and_attachment_settings_defaults(tmp_path):
     assert settings.attachment_context_max_chars == 6000
 
 
+def test_phase_11_time_context_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+    assert settings.time_context_enabled is True
+    assert settings.time_context_default_timezone == "Asia/Shanghai"
+    assert settings.time_context_default_region == "CN"
+    assert settings.time_context_max_events == 5
+    assert settings.time_context_prompt_max_chars == 3000
+    assert settings.prompt_section_max_chars == 8000
+    assert settings.ready_summary()["time_context_enabled"] is True
+
+
+def test_phase_11_time_context_settings_from_env(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "LINGNENG_TIME_CONTEXT_ENABLED": "false",
+            "LINGNENG_TIME_CONTEXT_DEFAULT_TIMEZONE": "UTC",
+            "LINGNENG_TIME_CONTEXT_DEFAULT_REGION": "CN",
+            "LINGNENG_TIME_CONTEXT_MAX_EVENTS": "3",
+            "LINGNENG_TIME_CONTEXT_PROMPT_MAX_CHARS": "1200",
+            "LINGNENG_PROMPT_SECTION_MAX_CHARS": "2400",
+        }
+    )
+
+    assert settings.time_context_enabled is False
+    assert settings.time_context_default_timezone == "UTC"
+    assert settings.time_context_default_region == "CN"
+    assert settings.time_context_max_events == 3
+    assert settings.time_context_prompt_max_chars == 1200
+    assert settings.prompt_section_max_chars == 2400
+
+
 def test_skill_roots_parse_json_comma_and_newline(tmp_path):
     first = tmp_path / "employees"
     second = tmp_path / "tasks"
@@ -357,6 +390,8 @@ def test_route_settings_reject_values_below_spec_minimums(
         ("LINGNENG_ATTACHMENT_MAX_IMAGE_BYTES", "-1"),
         ("LINGNENG_ATTACHMENT_TIMEOUT_SECONDS", "0.09"),
         ("LINGNENG_ATTACHMENT_CONTEXT_MAX_CHARS", "499"),
+        ("LINGNENG_TIME_CONTEXT_PROMPT_MAX_CHARS", "499"),
+        ("LINGNENG_PROMPT_SECTION_MAX_CHARS", "499"),
     ],
 )
 def test_phase_5_settings_reject_values_below_spec_minimums(

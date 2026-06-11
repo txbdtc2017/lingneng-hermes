@@ -137,6 +137,7 @@ class AttachmentProcessingRequest(BaseModel):
     max_total_bytes: int
     max_file_bytes: int
     max_image_bytes: int
+    query: str = ""
 
 
 class AttachmentProcessingResult(BaseModel):
@@ -240,6 +241,7 @@ def build_attachment_prompt_context(
         max_total_bytes=settings.attachment_max_total_bytes,
         max_file_bytes=settings.attachment_max_file_bytes,
         max_image_bytes=settings.attachment_max_image_bytes,
+        query=_bounded_query(request.query.content),
     )
     try:
         provider_result = _coerce_provider_result(
@@ -423,6 +425,10 @@ def _bounded_context_text(value: str, *, max_chars: int) -> tuple[str, bool]:
     if len(sanitized) <= max_chars:
         return sanitized, False
     return sanitized[:max_chars], True
+
+
+def _bounded_query(value: str) -> str:
+    return _sanitize_prompt_text(value)[:2000]
 
 
 def _sanitize_prompt_text(value: str) -> str:

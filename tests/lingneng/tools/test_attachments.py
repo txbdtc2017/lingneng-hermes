@@ -526,3 +526,20 @@ def test_attachment_history_content_never_enters_prompt_or_provider_request(tmp_
 
     assert "history content marker" not in result.prompt_text
     assert not hasattr(provider.requests[0], "history")
+
+
+def test_attachment_provider_request_includes_current_query_only(tmp_path):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="ok",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+    request = request_with_attachments(attachment())
+
+    with attachment_processing_context(provider=provider):
+        build_attachment_prompt_context(settings(tmp_path), request)
+
+    assert provider.requests[0].query == request.query.content
+    assert "history content marker" not in provider.requests[0].query

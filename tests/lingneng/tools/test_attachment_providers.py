@@ -6,10 +6,14 @@ from typing import Any
 
 import httpx
 import lingneng.tools.attachment_http_provider as http_provider_module
+import lingneng.tools.attachment_local_text_provider as local_text_provider_module
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.attachment_http_provider import (
     HttpAttachmentProcessingProvider,
+)
+from lingneng.tools.attachment_local_text_provider import (
+    LocalTextAttachmentProcessingProvider,
 )
 from lingneng.tools.attachment_provider import (
     build_attachment_processing_provider,
@@ -512,4 +516,213 @@ def test_http_attachment_provider_default_client_disables_trust_env(
     assert captured["url"] == "https://attachments.example/process"
     assert captured["headers"]["Authorization"] == "Bearer secret-key"
     assert chunk_sizes == [4097]
+    assert result.status == "succeeded"
+
+
+def test_local_text_provider_downloads_text_and_selects_relevant_chunks(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://files.example.test/menu.txt"
+        body = (
+            ("无关内容 " * 120)
+            + "菜单说明\n"
+            "会员复购活动适合工作日午餐。\n"
+            + ("无关内容 " * 120)
+        )
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    request = attachment_request()
+    request.attachments[0].file_name = "menu.txt"
+    request.attachments[0].mime_type = "text/plain"
+    request.attachments[0].download_url = "https://files.example.test/menu.txt"
+    request.query = "会员复购"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(
+            tmp_path,
+            LINGNENG_ATTACHMENT_CHUNK_SIZE="500",
+            LINGNENG_ATTACHMENT_CHUNK_OVERLAP="50",
+            LINGNENG_ATTACHMENT_SELECTED_CHUNK_LIMIT="1",
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "succeeded"
+    assert result.processed_count == 1
+    assert result.selected_count == 1
+    assert "### menu.txt" in result.context_text
+    assert "会员复购活动" in result.context_text
+    assert "history content marker" not in result.context_text
+
+
+def test_local_text_provider_formats_csv_rows(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            content="month,revenue\nJan,10\nFeb,20\n".encode("utf-8"),
+            headers={"content-length": "28"},
+        )
+
+    request = attachment_request()
+    request.attachments[0].file_name = "sales.csv"
+    request.attachments[0].mime_type = "text/csv"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "succeeded"
+    assert "month | revenue" in result.context_text
+    assert "Jan | 10" in result.context_text
+    assert result.processed_count == 1
+
+
+def test_local_text_provider_rejects_unsupported_pdf_without_download(tmp_path):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        del request
+        calls += 1
+        return httpx.Response(200, content=b"pdf")
+
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert calls == 0
+    assert result.status == "skipped"
+    assert result.processed_count == 0
+    assert result.failed_count == 1
+    assert result.warnings[0].code == "ATTACHMENT_PROVIDER_NOT_CONFIGURED"
+
+
+def test_local_text_provider_enforces_download_byte_limit(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            content=b"x" * 20,
+            headers={"content-length": "20"},
+        )
+
+    request = attachment_request()
+    request.attachments[0].file_name = "menu.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path, LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_BYTES="5"),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_FILE_TOO_LARGE"
+    assert result.context_text == ""
+
+
+def test_local_text_provider_enforces_streaming_byte_limit(tmp_path):
+    chunks_read: list[bytes] = []
+    chunk_sizes: list[int | None] = []
+
+    class FakeStreamResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def iter_bytes(self, *, chunk_size: int | None = None):
+            chunk_sizes.append(chunk_size)
+            for chunk in (b"x" * 4, b"y" * 4, b"z" * 4):
+                chunks_read.append(chunk)
+                yield chunk
+
+    class FakeStreamContext:
+        def __enter__(self) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    class FakeClient:
+        def stream(self, *args: Any, **kwargs: Any) -> FakeStreamContext:
+            return FakeStreamContext()
+
+    request = attachment_request()
+    request.attachments[0].file_name = "menu.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path, LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_BYTES="5"),
+        http_client=FakeClient(),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_FILE_TOO_LARGE"
+    assert chunk_sizes == [6]
+    assert chunks_read == [b"x" * 4, b"y" * 4]
+
+
+def test_local_text_provider_default_client_disables_redirects_and_trust_env(
+    tmp_path,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+    chunk_sizes: list[int | None] = []
+
+    class FakeClient:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def __init__(
+            self,
+            *,
+            timeout: float,
+            follow_redirects: bool,
+            trust_env: bool,
+        ) -> None:
+            captured["timeout"] = timeout
+            captured["follow_redirects"] = follow_redirects
+            captured["trust_env"] = trust_env
+
+        def __enter__(self) -> "FakeClient":
+            captured["entered"] = captured.get("entered", 0) + 1
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            captured["exited"] = captured.get("exited", 0) + 1
+
+        def stream(self, method: str, url: str, *, timeout: float) -> "FakeClient":
+            captured["method"] = method
+            captured["url"] = url
+            captured["request_timeout"] = timeout
+            return self
+
+        def iter_bytes(self, *, chunk_size: int | None = None):
+            chunk_sizes.append(chunk_size)
+            yield "菜单说明\n会员复购活动适合工作日午餐。\n".encode()
+
+    monkeypatch.setattr(local_text_provider_module.httpx, "Client", FakeClient)
+    request = attachment_request()
+    request.attachments[0].file_name = "menu.txt"
+    request.attachments[0].mime_type = "text/plain"
+    request.attachments[0].download_url = "https://files.example.test/menu.txt"
+    provider = LocalTextAttachmentProcessingProvider(settings(tmp_path))
+
+    result = provider.process(request)
+
+    assert captured["timeout"] == 3
+    assert captured["follow_redirects"] is False
+    assert captured["trust_env"] is False
+    assert captured["method"] == "GET"
+    assert captured["request_timeout"] == 3
+    assert captured["url"] == "https://files.example.test/menu.txt"
+    assert captured["entered"] == 2
+    assert captured["exited"] == 2
+    assert chunk_sizes == [65536]
     assert result.status == "succeeded"

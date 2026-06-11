@@ -52,6 +52,14 @@ _ROUTE_TRACE_ALLOWED_KEYS = frozenset(
         "confidence",
     }
 )
+_TIME_CONTEXT_TRACE_ALLOWED_KEYS = frozenset(
+    {
+        "scope",
+        "event_count",
+        "timezone",
+        "region",
+    }
+)
 
 
 def register_routes(
@@ -463,6 +471,15 @@ def _final_trace_summary(
     adapter_trace_summary: dict[str, Any],
 ) -> dict[str, Any]:
     summary = build_trace_summary(completed_context)
+    time_context = adapter_trace_summary.get("time_context")
+    if isinstance(time_context, dict):
+        safe_time_context = sanitize_trace_payload(
+            time_context,
+            allowed_keys=_TIME_CONTEXT_TRACE_ALLOWED_KEYS,
+        )
+        if safe_time_context:
+            summary["time_context"] = safe_time_context
+
     route = adapter_trace_summary.get("route")
     if not isinstance(route, dict):
         return summary

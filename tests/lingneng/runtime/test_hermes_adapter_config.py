@@ -2,12 +2,20 @@ import asyncio
 import subprocess
 import sys
 import threading
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 import lingneng.runtime.hermes_adapter as hermes_adapter_module
 from lingneng.api.app import create_app
 from lingneng.config.settings import LingNengSettings
+from lingneng.context.prompt import (
+    TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING,
+    TRUSTED_RUNTIME_CONTEXT_HEADING,
+    UNTRUSTED_REQUEST_CONTEXT_HEADING,
+)
+from lingneng.context.time import CurrentTimeContext, TimeContextService
 from lingneng.runtime.fake_agent import FakeAgentRunAdapter
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.schemas.chat_events import AgentStepEvent, FinalEvent
@@ -30,6 +38,20 @@ def settings(tmp_path, **overrides) -> LingNengSettings:
     }
     env.update(overrides)
     return LingNengSettings.from_env(env)
+
+
+def frozen_time_service(settings):
+    return TimeContextService(
+        settings,
+        now_provider=lambda timezone_info: datetime(
+            2026,
+            6,
+            11,
+            10,
+            30,
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        ),
+    )
 
 
 def test_create_app_uses_fake_adapter_by_default(tmp_path):
@@ -236,6 +258,49 @@ class FakeAttachmentProvider:
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
+
+
+class RaisingTimeContextService:
+    calls = 0
+
+    def build(self, request):
+        type(self).calls += 1
+        raise RuntimeError("private calendar failure /Users/rotas/private")
+
+
+class RaisingTimeContextPrompt:
+    def to_prompt_text(self, *, max_events, max_chars):
+        raise RuntimeError("private prompt failure /Users/rotas/private")
+
+    def trace_summary(self):
+        return {
+            "scope": "upcoming_30_days",
+            "event_count": 1,
+            "timezone": "Asia/Shanghai",
+            "region": "CN",
+        }
+
+
+class PromptRaisingTimeContextService:
+    def build(self, request):
+        return RaisingTimeContextPrompt()
+
+
+class CountingTimeContextService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def build(self, request):
+        self.calls += 1
+        day = 10 + self.calls
+        return CurrentTimeContext(
+            current_date=f"2026-06-{day:02d}",
+            current_datetime=f"2026-06-{day:02d}T10:30:00+08:00",
+            timezone="Asia/Shanghai",
+            region="CN",
+            weekday_cn="周四",
+            scope="today",
+        )
 
 
 class BlockingAttachmentProvider:
@@ -510,13 +575,221 @@ async def test_hermes_adapter_injects_bounded_skill_prompt(tmp_path):
     prompt = effective_system_prompt()
     java_index = prompt.index("你是灵能营销内容员工。")
     skill_index = prompt.index("## LingNeng Skill Context")
-    rag_index = prompt.index("## LingNeng RAG Guidance")
-    assert java_index < skill_index < rag_index
+    trusted_index = prompt.index(TRUSTED_RUNTIME_CONTEXT_HEADING)
+    tool_index = prompt.index(TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING)
+    assert java_index < skill_index < trusted_index < tool_index
     assert "employee-marketing-content-creator" in prompt
     assert "marketing-copy-generation" in prompt
     assert "写营销内容" in prompt
     assert "INLINE MUST NOT APPEAR" not in prompt
     assert "上一轮用户问题" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_adapter_injects_time_context_with_trust_sections(tmp_path):
+    payload = full_payload()
+    payload["query"]["content"] = "未来30天有什么营销节点"
+    payload["employee"]["employee_type"] = "marketing_planner"
+    payload["history"] = [
+        {"message_id": "h-1", "role": "user", "content": "history marker"}
+    ]
+    payload["skill"]["inline"] = {"summary": "INLINE MUST NOT APPEAR"}
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    runtime_settings = settings(tmp_path, LINGNENG_AGENT_MODE="hermes")
+    adapter = HermesAgentRunAdapter(
+        settings=runtime_settings,
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=frozen_time_service(runtime_settings),
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+    RecordingSystemPromptAgent.ephemeral_system_prompt_seen = ""
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    prompt = effective_system_prompt()
+    java_index = prompt.index("你是灵能营销内容员工。")
+    skill_index = prompt.index("## LingNeng Skill Context")
+    trusted_index = prompt.index(TRUSTED_RUNTIME_CONTEXT_HEADING)
+    tool_index = prompt.index(TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING)
+    assert java_index < skill_index < trusted_index < tool_index
+    assert "Current Date: 2026-06-11" in prompt
+    assert "Event: 618" in prompt
+    assert "history marker" not in prompt
+    assert "INLINE MUST NOT APPEAR" not in prompt
+    assert events[-1].trace_summary["time_context"]["scope"] == "upcoming_30_days"
+    assert events[-1].trace_summary["time_context"]["event_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_uses_untrusted_prompt_section(tmp_path):
+    payload = full_payload()
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.pdf",
+            "mime_type": "application/pdf",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.pdf",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    runtime_settings = settings(
+        tmp_path,
+        LINGNENG_AGENT_MODE="hermes",
+        LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+    )
+    adapter = HermesAgentRunAdapter(
+        settings=runtime_settings,
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=frozen_time_service(runtime_settings),
+    )
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text="当前附件摘要",
+            selected_count=1,
+            processed_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    prompt = effective_system_prompt()
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING in prompt
+    assert prompt.index(TRUSTED_RUNTIME_CONTEXT_HEADING) < prompt.index(
+        UNTRUSTED_REQUEST_CONTEXT_HEADING
+    )
+    assert "当前附件摘要" in prompt
+
+
+@pytest.mark.asyncio
+async def test_disabling_time_context_keeps_other_ephemeral_guidance(tmp_path):
+    payload = full_payload()
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    runtime_settings = settings(
+        tmp_path,
+        LINGNENG_AGENT_MODE="hermes",
+        LINGNENG_TIME_CONTEXT_ENABLED="false",
+    )
+    adapter = HermesAgentRunAdapter(
+        settings=runtime_settings,
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=frozen_time_service(runtime_settings),
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    prompt = effective_system_prompt()
+    assert TRUSTED_RUNTIME_CONTEXT_HEADING not in prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING in prompt
+    assert "time_context" not in events[-1].trace_summary
+
+
+@pytest.mark.asyncio
+async def test_disabled_time_context_does_not_construct_default_service(
+    tmp_path,
+    monkeypatch,
+):
+    class ExplodingTimeContextService:
+        def __init__(self, settings):
+            raise AssertionError("disabled path should not load calendar")
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "TimeContextService",
+        ExplodingTimeContextService,
+    )
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_TIME_CONTEXT_ENABLED="false",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
+    assert "time_context" not in events[-1].trace_summary
+
+
+@pytest.mark.asyncio
+async def test_time_context_service_failure_is_safely_omitted(
+    tmp_path,
+    caplog,
+):
+    RaisingTimeContextService.calls = 0
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=RaisingTimeContextService(),
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    assert RaisingTimeContextService.calls == 1
+    assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
+    assert "time_context" not in events[-1].trace_summary
+    assert "time context unavailable" in caplog.text
+    assert "private calendar failure" not in caplog.text
+    assert "/Users/rotas/private" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_time_context_prompt_failure_is_safely_omitted(
+    tmp_path,
+    caplog,
+):
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=PromptRaisingTimeContextService(),
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    assert TRUSTED_RUNTIME_CONTEXT_HEADING not in effective_system_prompt()
+    assert "time_context" not in events[-1].trace_summary
+    assert "time context prompt unavailable" in caplog.text
+    assert "private prompt failure" not in caplog.text
+    assert "/Users/rotas/private" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_time_context_is_built_once_per_request_and_refreshed(tmp_path):
+    service = CountingTimeContextService()
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+        time_context_service=service,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+    first_prompt = effective_system_prompt()
+    [event async for event in adapter.stream(request, resolved, "run-2")]
+    second_prompt = effective_system_prompt()
+
+    assert service.calls == 2
+    assert "Current Date: 2026-06-11" in first_prompt
+    assert "Current Date: 2026-06-12" in second_prompt
 
 
 @pytest.mark.asyncio
@@ -575,18 +848,19 @@ async def test_attachment_context_is_added_to_current_system_prompt_only(
 
     assert isinstance(events[-1], FinalEvent)
     assert "当前附件摘要" in first_prompt
-    assert "## LingNeng Current Request Attachments" in first_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING in first_prompt
+    assert "## LingNeng Current Request Attachments" not in first_prompt
     assert "当前附件摘要" not in first_system_prompt
-    assert "## LingNeng Current Request Attachments" not in first_system_prompt
-    assert "## LingNeng RAG Guidance" not in first_system_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING not in first_system_prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING not in first_system_prompt
     assert "当前附件摘要" in first_ephemeral_prompt
-    assert "## LingNeng Current Request Attachments" in first_ephemeral_prompt
-    assert "## LingNeng RAG Guidance" in first_ephemeral_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING in first_ephemeral_prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING in first_ephemeral_prompt
     assert "history content marker" not in first_prompt
     assert "当前附件摘要" not in second_prompt
-    assert "## LingNeng Current Request Attachments" not in second_prompt
-    assert "## LingNeng RAG Guidance" not in second_system_prompt
-    assert "## LingNeng RAG Guidance" in second_ephemeral_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING not in second_prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING not in second_system_prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING in second_ephemeral_prompt
     assert [req.attachments[0].file_id for req in provider.requests] == ["file-1"]
 
 
@@ -632,10 +906,11 @@ async def test_attachment_context_is_not_persisted_in_session_system_prompt(tmp_
     [event async for event in adapter.stream(second_request, resolved, "run-2")]
     second_prompt = effective_system_prompt(PersistingSystemPromptAgent)
 
-    assert "## LingNeng Current Request Attachments" not in stored_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING not in stored_prompt
     assert "当前附件摘要" not in stored_prompt
-    assert "## LingNeng RAG Guidance" not in stored_prompt
-    assert "## LingNeng Current Request Attachments" not in second_prompt
+    assert TRUSTED_RUNTIME_CONTEXT_HEADING not in stored_prompt
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING not in stored_prompt
+    assert UNTRUSTED_REQUEST_CONTEXT_HEADING not in second_prompt
     assert "当前附件摘要" not in second_prompt
 
 
@@ -685,9 +960,10 @@ async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_pat
 
     prompt = effective_system_prompt()
     skill_index = prompt.index("## LingNeng Skill Context")
-    attachment_index = prompt.index("## LingNeng Current Request Attachments")
-    rag_index = prompt.index("## LingNeng RAG Guidance")
-    assert skill_index < attachment_index < rag_index
+    trusted_index = prompt.index(TRUSTED_RUNTIME_CONTEXT_HEADING)
+    untrusted_index = prompt.index(UNTRUSTED_REQUEST_CONTEXT_HEADING)
+    tool_index = prompt.index(TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING)
+    assert skill_index < trusted_index < untrusted_index < tool_index
 
 
 @pytest.mark.asyncio
@@ -914,8 +1190,11 @@ async def test_hermes_adapter_does_not_pass_java_history_to_conversation_history
     kwargs = CapturingAgent.calls[0]
     assert agent.run_args["user_message"] == request.query.content
     assert agent.run_args["system_message"].startswith(request.system_prompt.content)
-    assert "## LingNeng RAG Guidance" not in agent.run_args["system_message"]
-    assert "## LingNeng RAG Guidance" in kwargs["ephemeral_system_prompt"]
+    assert (
+        TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING
+        not in agent.run_args["system_message"]
+    )
+    assert TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING in kwargs["ephemeral_system_prompt"]
     assert "Java 历史" not in agent.run_args["system_message"]
     assert "Java 历史" not in kwargs["ephemeral_system_prompt"]
     assert agent.run_args["persist_user_message"] == request.query.content

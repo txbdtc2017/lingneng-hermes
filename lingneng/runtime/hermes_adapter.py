@@ -14,6 +14,8 @@ from typing import Any
 from run_agent import AIAgent
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.context.prompt import compose_lingneng_ephemeral_prompt
+from lingneng.context.time import CurrentTimeContext, TimeContextService
 from lingneng.events.bridge import (
     agent_step_completed,
     agent_step_skipped,
@@ -62,7 +64,6 @@ _KANBAN_ENV_KEYS = (
 _KANBAN_ENV_LOCK = threading.RLock()
 _KANBAN_ENV_ISOLATION_ACTIVE = False
 _MINIMAL_RAG_GUIDANCE = (
-    "## LingNeng RAG Guidance\n"
     "Use retrieve_rag for internal learned business knowledge that needs factual "
     "support. Do not use it for realtime public facts."
 )
@@ -186,11 +187,13 @@ class HermesAgentRunAdapter:
         settings: LingNengSettings,
         agent_cls: type = AIAgent,
         session_store: LingNengHermesSessionStore | None = None,
+        time_context_service: TimeContextService | None = None,
     ) -> None:
         self.settings = settings
         self.agent_cls = agent_cls
         self.session_store = session_store or LingNengHermesSessionStore(settings)
         self.skill_loader = LingNengSkillLoader(settings)
+        self.time_context_service = time_context_service
         self._last_agent_for_tests: Any | None = None
 
     async def stream(
@@ -214,6 +217,13 @@ class HermesAgentRunAdapter:
         buffered_answer_events: list[AnswerDeltaEvent] = []
         active_artifact_tools = 0
         answer_flush_scheduled = False
+        time_context = _build_time_context(
+            self.time_context_service,
+            self.settings,
+            request,
+        )
+        time_context_prompt = _time_context_prompt_text(self.settings, time_context)
+        trace_time_context = time_context if time_context_prompt else None
 
         def on_delta(text: str | None) -> None:
             nonlocal sequence
@@ -369,7 +379,9 @@ class HermesAgentRunAdapter:
                             on_tool_progress=on_tool_progress,
                         )
                         ephemeral_system_prompt = _compose_ephemeral_system_message(
-                            attachment_context.prompt_text
+                            settings=self.settings,
+                            trusted_runtime_context=time_context_prompt,
+                            attachment_prompt=attachment_context.prompt_text,
                         )
                         agent = self._build_agent(
                             resolved_session,
@@ -421,6 +433,11 @@ class HermesAgentRunAdapter:
                 if not streamed_text:
                     sequence += 1
                     yield answer_delta(text=final_text, sequence=sequence)
+                trace_summary: dict[str, Any] = {}
+                if trace_time_context is not None:
+                    trace_summary["time_context"] = trace_time_context.trace_summary()
+                if final_route_trace:
+                    trace_summary["route"] = final_route_trace
                 yield final_answer(
                     run_id=run_id,
                     answer=final_text,
@@ -431,9 +448,7 @@ class HermesAgentRunAdapter:
                     ),
                     artifacts=artifacts,
                     settings=self.settings,
-                    trace_summary=(
-                        {"route": final_route_trace} if final_route_trace else {}
-                    ),
+                    trace_summary=trace_summary,
                 )
                 return
 
@@ -492,6 +507,41 @@ def _build_rag_provider(settings: LingNengSettings) -> HttpRagProvider | None:
     if not settings.rag_endpoint.strip():
         return None
     return HttpRagProvider(settings)
+
+
+def _build_time_context(
+    service: TimeContextService | None,
+    settings: LingNengSettings,
+    request: ChatStreamRequest,
+) -> CurrentTimeContext | None:
+    if not settings.time_context_enabled:
+        return None
+    try:
+        resolved_service = service or TimeContextService(settings)
+        return resolved_service.build(request)
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng time context unavailable; continuing without time context."
+        )
+        return None
+
+
+def _time_context_prompt_text(
+    settings: LingNengSettings,
+    time_context: CurrentTimeContext | None,
+) -> str:
+    if time_context is None:
+        return ""
+    try:
+        return time_context.to_prompt_text(
+            max_events=settings.time_context_max_events,
+            max_chars=settings.time_context_prompt_max_chars,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng time context prompt unavailable; continuing without time context."
+        )
+        return ""
 
 
 def _public_runtime_error(run_id: str, request_id: str) -> ErrorEvent:
@@ -581,9 +631,15 @@ def _compose_system_message(
     return "\n\n".join(part for part in parts if part)
 
 
-def _compose_ephemeral_system_message(attachment_prompt: str = "") -> str:
-    parts = []
-    if attachment_prompt.strip():
-        parts.append(attachment_prompt.strip())
-    parts.append(_MINIMAL_RAG_GUIDANCE)
-    return "\n\n".join(part for part in parts if part)
+def _compose_ephemeral_system_message(
+    *,
+    settings: LingNengSettings,
+    trusted_runtime_context: str = "",
+    attachment_prompt: str = "",
+) -> str:
+    return compose_lingneng_ephemeral_prompt(
+        trusted_runtime_context=trusted_runtime_context,
+        untrusted_request_context=attachment_prompt,
+        tool_public_guidance=_MINIMAL_RAG_GUIDANCE,
+        max_section_chars=settings.prompt_section_max_chars,
+    )

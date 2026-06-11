@@ -111,6 +111,15 @@ class RouteSuggestionAdapter:
             status="succeeded",
             answer="交给营销内容创作处理。",
             trace_summary={
+                "time_context": {
+                    "scope": "upcoming_30_days",
+                    "event_count": 2,
+                    "timezone": "Asia/Shanghai",
+                    "region": "CN",
+                    "prompt": "MUST_NOT_LEAK",
+                    "token": "secret-token",
+                    "path": "/Users/rotas/private-file",
+                },
                 "route": {
                     "route_event_type": "route_suggestion",
                     "terminal": True,
@@ -164,6 +173,12 @@ def test_chat_stream_encodes_route_event_and_preserves_safe_route_trace(tmp_path
     assert "run_started" in event_names
     assert "route_suggestion" in event_names
     assert event_names[-1] == "final"
+    assert final_payload["trace_summary"]["time_context"] == {
+        "scope": "upcoming_30_days",
+        "event_count": 2,
+        "timezone": "Asia/Shanghai",
+        "region": "CN",
+    }
     assert final_payload["trace_summary"]["route"] == {
         "route_event_type": "route_suggestion",
         "terminal": True,
@@ -176,6 +191,7 @@ def test_chat_stream_encodes_route_event_and_preserves_safe_route_trace(tmp_path
         ensure_ascii=False,
     )
     for forbidden in (
+        "MUST_NOT_LEAK",
         "query",
         "reply",
         "reason",

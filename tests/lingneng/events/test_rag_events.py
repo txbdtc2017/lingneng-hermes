@@ -1,9 +1,10 @@
 import json
+from typing import Any, cast
 
 from lingneng.events.bridge import (
     dedupe_citations,
     final_answer,
-    rag_events_from_tool_result,
+    rag_events_from_tool_result as _rag_events_from_tool_result,
 )
 from lingneng.schemas.chat_events import CitationDeltaEvent, FinalEvent, RagContextEvent
 
@@ -17,6 +18,15 @@ CITATION = {
     "chunk_id": "chunk-1",
     "score": 0.9,
 }
+
+
+def rag_events_from_tool_result(
+    **kwargs: Any,
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    return cast(
+        tuple[list[Any], list[dict[str, Any]]],
+        _rag_events_from_tool_result(**kwargs),
+    )
 
 
 def result_payload(**overrides):
@@ -63,6 +73,73 @@ def test_rag_context_allows_benign_request_query_input_words():
     )
     assert events[1].status == "hit"
     assert citations == [CITATION]
+
+
+def test_rag_events_allow_benign_token_usage_and_exception_rate_text():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            context="token usage trend and exception rate are business metrics.",
+            metadata={
+                "notes": [
+                    "token usage is high",
+                    "exception rate changed",
+                ]
+            },
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert events[1].context == "token usage trend and exception rate are business metrics."
+    assert events[1].metadata["notes"] == [
+        "token usage is high",
+        "exception rate changed",
+    ]
+    assert citations == [CITATION]
+
+
+def test_rag_events_strip_percent_encoded_private_values_and_citation_fields():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            context="api%5Fkey%3Dabc123 %2FUsers%2Frotas%2Fprivate",
+            citations=[
+                {
+                    **CITATION,
+                    "source_file_name": "%2FUsers%2Frotas%2Fprivate.pdf",
+                    "section_title": "token%3Dsecret",
+                    "raw_payload": "api_key=secret",
+                }
+            ],
+            metadata={
+                "selected_count": 1,
+                "notes": ["x-amz-signature=abc", "public retrieval summary"],
+                "request_payload": "query=USER PRIVATE INPUT",
+            },
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    dumped = json.dumps(
+        [event.model_dump(mode="json") for event in events],
+        ensure_ascii=False,
+    )
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert events[0].source_file_name == ""
+    assert events[0].section_title == ""
+    assert events[1].context == ""
+    assert events[1].metadata == {
+        "selected_count": 1,
+        "notes": ["", "public retrieval summary"],
+    }
+    assert citations[0]["source_file_name"] == ""
+    assert "raw_payload" not in dumped
+    assert "api%5Fkey" not in dumped
+    assert "%2FUsers" not in dumped
+    assert "x-amz-signature" not in dumped
 
 
 def test_rag_empty_emits_empty_context_only_when_requested():

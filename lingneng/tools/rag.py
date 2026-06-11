@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import ResolvedSessionKey
+from lingneng.tools.artifacts import stable_percent_decode
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,32 @@ _FORBIDDEN_TEXT_PARTS = (
     "exception",
     "user private input",
 )
+_PUBLIC_CITATION_FIELDS = frozenset(
+    {
+        "document_id",
+        "source_file_id",
+        "source_file_name",
+        "page_no",
+        "section_title",
+        "chunk_id",
+        "score",
+    }
+)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
+_LOCAL_ROOT_FRAGMENT_RE = re.compile(
+    r"(?<![A-Za-z0-9._-])[\\/]+(?:Users|home|private|tmp|var|etc|opt|root)\b"
+)
+_CREDENTIAL_VALUE_RE = re.compile(
+    r"(?i)"
+    r"(api[_-]?key|authorization|bearer|credential|password|passwd|secret|signature|token)"
+    r"\s*[:=]\s*\S+|bearer\s+\S+"
+)
+_RAW_PAYLOAD_VALUE_RE = re.compile(
+    r"(?i)\b(?:raw\s+)?(?:request|query|input|payload|args|history)\b\s*[:=]\s*\S+"
+)
+_SECRET_TOKEN_FRAGMENT_RE = re.compile(r"(?i)\b(?:secret|token|credential)[_-][A-Za-z0-9]")
+_URL_CREDENTIALS_FRAGMENT_RE = re.compile(r"://[^/?#\s:@]+:[^/?#\s:@]+@")
 _PUBLIC_FAILURE_CODES = frozenset(
     {
         "RAG_CONTEXT_MISSING",
@@ -383,10 +411,19 @@ def _public_failure_code(value: str | None, *, default: str) -> str:
 
 
 def _sanitize_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    sanitized = _sanitize_public_value(citations)
-    if not isinstance(sanitized, list):
+    if not isinstance(citations, list):
         return []
-    return [item for item in sanitized if isinstance(item, dict)]
+    sanitized: list[dict[str, Any]] = []
+    for item in citations:
+        if not isinstance(item, dict):
+            continue
+        citation: dict[str, Any] = {}
+        for key in _PUBLIC_CITATION_FIELDS:
+            if key in item:
+                citation[key] = _sanitize_public_value(item[key])
+        if citation:
+            sanitized.append(citation)
+    return sanitized
 
 
 def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -413,10 +450,30 @@ def _sanitize_public_value(value: Any) -> Any:
 
 
 def _sanitize_public_text(value: str) -> str:
-    lowered = value.lower()
-    if any(part in lowered for part in _FORBIDDEN_TEXT_PARTS):
+    clean = _CONTROL_CHAR_RE.sub("", value).strip()
+    decoded, decode_stable = stable_percent_decode(clean)
+    if (
+        not decode_stable
+        or _has_forbidden_public_text(clean)
+        or _has_forbidden_public_text(decoded)
+    ):
         return ""
-    return value
+    return clean
+
+
+def _has_forbidden_public_text(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        _CREDENTIAL_VALUE_RE.search(value) is not None
+        or _RAW_PAYLOAD_VALUE_RE.search(value) is not None
+        or _SECRET_TOKEN_FRAGMENT_RE.search(value) is not None
+        or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
+        or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
+        or _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None
+        or "x-amz-signature" in lowered
+        or "traceback" in lowered
+        or "user private input" in lowered
+    )
 
 
 def _is_forbidden_key(value: object) -> bool:

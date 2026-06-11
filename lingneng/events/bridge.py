@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -22,6 +23,7 @@ from lingneng.schemas.chat_events import (
 from lingneng.tools.artifacts import (
     artifact_from_public_dict,
     dedupe_artifacts as _dedupe_artifacts,
+    stable_percent_decode,
 )
 
 
@@ -63,6 +65,32 @@ _METADATA_TEXT_BLOCKLIST = (
     "history",
     "input",
 )
+_PUBLIC_CITATION_FIELDS = frozenset(
+    {
+        "document_id",
+        "source_file_id",
+        "source_file_name",
+        "page_no",
+        "section_title",
+        "chunk_id",
+        "score",
+    }
+)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
+_LOCAL_ROOT_FRAGMENT_RE = re.compile(
+    r"(?<![A-Za-z0-9._-])[\\/]+(?:Users|home|private|tmp|var|etc|opt|root)\b"
+)
+_CREDENTIAL_VALUE_RE = re.compile(
+    r"(?i)"
+    r"(api[_-]?key|authorization|bearer|credential|password|passwd|secret|signature|token)"
+    r"\s*[:=]\s*\S+|bearer\s+\S+"
+)
+_RAW_PAYLOAD_VALUE_RE = re.compile(
+    r"(?i)\b(?:raw\s+)?(?:request|query|input|payload|args|history)\b\s*[:=]\s*\S+"
+)
+_SECRET_TOKEN_FRAGMENT_RE = re.compile(r"(?i)\b(?:secret|token|credential)[_-][A-Za-z0-9]")
+_URL_CREDENTIALS_FRAGMENT_RE = re.compile(r"://[^/?#\s:@]+:[^/?#\s:@]+@")
 
 
 def _tool_step_id(sequence: int) -> str:
@@ -278,13 +306,15 @@ def final_answer(
     settings: LingNengSettings | None = None,
     trace_summary: dict[str, Any] | None = None,
 ) -> FinalEvent:
-    return FinalEvent(
-        run_id=run_id,
-        status="succeeded",
-        answer=answer,
-        citations=citations or [],
-        artifacts=_valid_artifact_dicts(artifacts or [], settings=settings),
-        trace_summary=trace_summary or {},
+    return FinalEvent.model_validate(
+        {
+            "run_id": run_id,
+            "status": "succeeded",
+            "answer": answer,
+            "citations": citations or [],
+            "artifacts": _valid_artifact_dicts(artifacts or [], settings=settings),
+            "trace_summary": trace_summary or {},
+        }
     )
 
 
@@ -324,8 +354,15 @@ def _valid_citations(value: Any) -> list[Citation]:
         return []
     citations: list[Citation] = []
     for item in value:
+        if not isinstance(item, dict):
+            continue
+        citation = {
+            key: _sanitize_public_value(item[key])
+            for key in _PUBLIC_CITATION_FIELDS
+            if key in item
+        }
         try:
-            citations.append(Citation.model_validate(item))
+            citations.append(Citation.model_validate(citation))
         except ValidationError:
             continue
     return citations
@@ -358,7 +395,7 @@ def _rag_status(
     payload: dict[str, Any],
     citations: list[Citation],
     context_text: str,
-) -> str:
+) -> Literal["hit", "empty", "failed"]:
     if _is_failure_result(payload):
         return "failed"
     value = payload.get("status")
@@ -371,11 +408,13 @@ def _rag_status(
 
 def _rag_context_text(payload: dict[str, Any]) -> str:
     context = payload.get("context")
-    if isinstance(context, str) and _is_public_text(context):
-        return context
+    if isinstance(context, str):
+        public_context = _sanitize_public_text(context)
+        if public_context or not _is_failure_result(payload):
+            return public_context
     message = payload.get("message")
     if _is_failure_result(payload) and isinstance(message, str):
-        return message if _is_public_text(message) else ""
+        return _sanitize_public_text(message)
     return ""
 
 
@@ -385,8 +424,7 @@ def _rag_metadata(value: Any) -> dict[str, Any]:
 
 
 def _is_public_text(value: str) -> bool:
-    lowered = value.lower()
-    return not any(part in lowered for part in _PUBLIC_CONTEXT_TEXT_BLOCKLIST)
+    return bool(_sanitize_public_text(value))
 
 
 def _is_failure_result(payload: dict[str, Any]) -> bool:
@@ -433,7 +471,7 @@ def _sanitize_public_value(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_sanitize_public_value(item) for item in value]
     if isinstance(value, str):
-        return value if _is_public_metadata_text(value) else ""
+        return _sanitize_public_text(value)
     if value is None or isinstance(value, bool | int | float):
         return value
     return None
@@ -445,5 +483,31 @@ def _is_public_metadata_key(value: str) -> bool:
 
 
 def _is_public_metadata_text(value: str) -> bool:
+    return bool(_sanitize_public_text(value))
+
+
+def _sanitize_public_text(value: str) -> str:
+    clean = _CONTROL_CHAR_RE.sub("", value).strip()
+    decoded, decode_stable = stable_percent_decode(clean)
+    if (
+        not decode_stable
+        or _has_forbidden_public_text(clean)
+        or _has_forbidden_public_text(decoded)
+    ):
+        return ""
+    return clean
+
+
+def _has_forbidden_public_text(value: str) -> bool:
     lowered = value.lower()
-    return not any(part in lowered for part in _METADATA_TEXT_BLOCKLIST)
+    return (
+        _CREDENTIAL_VALUE_RE.search(value) is not None
+        or _RAW_PAYLOAD_VALUE_RE.search(value) is not None
+        or _SECRET_TOKEN_FRAGMENT_RE.search(value) is not None
+        or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
+        or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
+        or _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None
+        or "x-amz-signature" in lowered
+        or "traceback" in lowered
+        or "user private input" in lowered
+    )

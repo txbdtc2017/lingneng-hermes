@@ -292,6 +292,64 @@ def test_retrieve_rag_context_allows_benign_query_input_words(tmp_path):
     assert result["context"] == "Customer query input routing policy."
 
 
+def test_retrieve_rag_sanitizes_percent_encoded_secret_context_and_metadata(
+    tmp_path,
+):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="api%5Fkey%3Dabc123 %2FUsers%2Frotas%2Fprivate",
+            citations=[],
+            metadata={
+                "notes": ["x-amz-signature=abc", "public retrieval summary"],
+            },
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False).lower()
+    assert result["context"] == ""
+    assert result["metadata"]["notes"] == ["", "public retrieval summary"]
+    assert "api%5fkey" not in dumped
+    assert "%2fusers" not in dumped
+    assert "x-amz-signature" not in dumped
+
+
+def test_retrieve_rag_sanitizes_citation_private_fields(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="公共上下文",
+            citations=[
+                {
+                    "document_id": "doc-1",
+                    "source_file_id": "file-1",
+                    "source_file_name": "/Users/rotas/private/menu.pdf",
+                    "page_no": 2,
+                    "section_title": "Authorization: Bearer abc123",
+                    "chunk_id": "chunk-1",
+                    "score": 0.9,
+                    "raw_payload": "api_key=secret",
+                }
+            ],
+            metadata={},
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["citations"][0]["chunk_id"] == "chunk-1"
+    assert result["citations"][0]["source_file_name"] == ""
+    assert result["citations"][0]["section_title"] == ""
+    assert "raw_payload" not in dumped
+    assert "api_key" not in dumped
+    assert "/Users/rotas" not in dumped
+
+
 def test_retrieve_rag_not_configured_is_safe(tmp_path):
     with rag_request_context(make_context(tmp_path), provider=None):
         result = json.loads(retrieve_rag_handler({"query": "需要资料"}))

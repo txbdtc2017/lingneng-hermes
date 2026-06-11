@@ -8,6 +8,7 @@ from lingneng.skills.models import (
     SkillKind,
     SkillPromptContext,
     SkillPromptFragment,
+    SkillResourceManifest,
     SkillPromptWarning,
 )
 
@@ -37,6 +38,7 @@ class LingNengSkillLoader:
         return SkillPromptContext(
             employee_base=employee_base,
             selected_skill=selected_skill,
+            infrastructure_fragments=[_handoff_guidance_fragment()],
             warnings=warnings,
             prompt_max_chars=self.settings.skill_prompt_max_chars,
         )
@@ -134,3 +136,26 @@ def _bounded_excerpt(text: str, max_chars: int) -> tuple[str, bool]:
     marker = "\n...[truncated]"
     limit = max(0, max_chars - len(marker))
     return stripped[:limit].rstrip() + marker, True
+
+
+def _handoff_guidance_fragment() -> SkillPromptFragment:
+    return SkillPromptFragment(
+        package_name="lingneng-employee-handoff-guidance",
+        kind=SkillKind.INFRASTRUCTURE,
+        version="1.0.0",
+        description="员工跳转工具使用边界",
+        body_excerpt=(
+            "## Employee Handoff Guidance\n"
+            "- Answer directly when current employee can handle; use read_skill/search_skills if boundaries unclear.\n"
+            "- No handoff for smalltalk, meta, or general tasks.\n"
+            "- Use employee_handoff action=suggest when another employee fits; action=confirm for 2-4 ambiguous choices.\n"
+            "- After terminal suggest/confirm, reply with public_reply and stop this turn.\n"
+            "- Never invent employee types, names, thresholds, or private reasons."
+        ),
+        resource_manifest=SkillResourceManifest(),
+        display_name="员工跳转指引",
+        recommended_task_skills=[],
+        recommended_capabilities=[],
+        tools=["employee_handoff", "search_skills", "read_skill"],
+        truncated=False,
+    )

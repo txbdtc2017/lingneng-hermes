@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import threading
 import time
@@ -27,6 +28,7 @@ from lingneng.events.bridge import (
     route_events_from_tool_result,
     run_started,
 )
+from lingneng.routing.store import LingNengRoutePendingStore
 from lingneng.runtime.agent_adapter import LingNengStreamEvent
 from lingneng.schemas.chat_events import AgentStepEvent, AnswerDeltaEvent, ErrorEvent
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -36,6 +38,10 @@ from lingneng.skills.loader import LingNengSkillLoader
 from lingneng.tools.attachments import (
     AttachmentPromptContext,
     build_attachment_prompt_context,
+)
+from lingneng.tools.employee_handoff import (
+    build_handoff_request_context,
+    employee_handoff_context,
 )
 from lingneng.tools.rag import (
     HttpRagProvider,
@@ -60,6 +66,7 @@ _MINIMAL_RAG_GUIDANCE = (
     "Use retrieve_rag for internal learned business knowledge that needs factual "
     "support. Do not use it for realtime public facts."
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -155,6 +162,22 @@ def _resolved_agent_runtime_kwargs() -> dict[str, Any]:
         if value:
             kwargs[target_key] = value
     return kwargs
+
+
+def _build_route_pending_store(
+    settings: LingNengSettings,
+) -> LingNengRoutePendingStore | None:
+    try:
+        return LingNengRoutePendingStore(
+            settings.route_pending_db_path,
+            ttl_seconds=settings.route_pending_ttl_seconds,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng route pending store unavailable; route confirmations "
+            "will not be persisted."
+        )
+        return None
 
 
 class HermesAgentRunAdapter:
@@ -321,9 +344,16 @@ class HermesAgentRunAdapter:
                             active_session_id
                         )
                     )
+                    handoff_context = build_handoff_request_context(
+                        settings=self.settings,
+                        request=request,
+                        resolved_session=resolved_session,
+                        pending_store=_build_route_pending_store(self.settings),
+                    )
                     with (
                         lingneng_tool_context(self.settings),
                         skill_tool_context(self.settings),
+                        employee_handoff_context(handoff_context),
                     ):
                         _emit_attachment_started(
                             request=request,

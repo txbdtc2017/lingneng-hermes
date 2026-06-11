@@ -288,6 +288,44 @@ def test_confirmed_employee_without_pending_record_emits_route_decision(tmp_path
     }
 
 
+def test_confirmed_current_employee_suggest_returns_route_result(tmp_path):
+    pending_store = LingNengRoutePendingStore(
+        tmp_path / "route_pending.sqlite3",
+        ttl_seconds=600,
+    )
+    payload = _payload_without_routing()
+    payload["employee"]["employee_type"] = "marketing_planner"
+    payload["routing"] = {
+        "confirmed_employee_type": "marketing_planner",
+    }
+    result = dispatch(
+        context(tmp_path, payload, pending_store=pending_store),
+        {
+            "action": "suggest",
+            "target_employee_type": "marketing_planner",
+            "confidence": 0.9,
+            "reason": "用户已确认由当前员工继续处理",
+            "reply": "已确认由当前员工继续处理。",
+        },
+    )
+
+    assert result["success"] is True
+    assert result["route_event_type"] == "route_result"
+    assert result["terminal"] is False
+    assert result["route"] == {
+        "target_employee_type": "marketing_planner",
+        "confidence": 1.0,
+        "need_confirm": False,
+        "is_current_employee": True,
+    }
+    assert result["confirmation"] == {
+        "confirmed_employee_type": "marketing_planner",
+        "confirmation_message_id": None,
+        "matched_pending": False,
+        "pending_consumed": False,
+    }
+
+
 def test_confirmed_employee_with_unmatched_message_id_does_not_consume_latest_pending(
     tmp_path,
 ):

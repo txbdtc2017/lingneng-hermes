@@ -131,4 +131,3 @@ def _aliases(
     if not catalog_display_name or catalog_display_name == public_display_name:
         return []
     return [catalog_display_name]
-

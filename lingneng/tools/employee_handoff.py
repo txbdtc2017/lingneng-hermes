@@ -111,6 +111,9 @@ def employee_handoff_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
             current_employee_type=context.current_employee_type,
             reason_max_chars=context.settings.route_reason_max_chars,
             reply_max_chars=context.settings.route_reply_max_chars,
+            allow_current_suggest=(
+                context.confirmed_employee_type == context.current_employee_type
+            ),
         )
     except (TypeError, ValueError, ValidationError):
         return _json_failure(

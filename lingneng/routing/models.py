@@ -64,6 +64,7 @@ class EmployeeHandoffCommand(BaseModel):
             self.action == "suggest"
             and current_employee_type is not None
             and self.target_employee_type == current_employee_type
+            and not _context_allow_current_suggest(info)
         ):
             raise ValueError("suggest action target must differ from current employee")
 
@@ -173,6 +174,7 @@ def normalize_handoff_command(
     current_employee_type: EmployeeType | str,
     reason_max_chars: int,
     reply_max_chars: int,
+    allow_current_suggest: bool = False,
 ) -> EmployeeHandoffCommand:
     if not isinstance(raw_args, Mapping):
         raise ValueError("handoff arguments must be an object")
@@ -193,7 +195,10 @@ def normalize_handoff_command(
     ]
     return EmployeeHandoffCommand.model_validate(
         prepared,
-        context={"current_employee_type": current},
+        context={
+            "allow_current_suggest": allow_current_suggest,
+            "current_employee_type": current,
+        },
     )
 
 
@@ -241,3 +246,7 @@ def _context_employee_type(info: ValidationInfo) -> EmployeeType | None:
     if value is None:
         return None
     return EmployeeType(value)
+
+
+def _context_allow_current_suggest(info: ValidationInfo) -> bool:
+    return bool(info.context and info.context.get("allow_current_suggest"))

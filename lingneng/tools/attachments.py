@@ -69,22 +69,12 @@ _FORBIDDEN_TEXT_PARTS = (
     "x-amz-signature",
     "x-oss-signature",
 )
-_QUERY_URL_SENSITIVE_PARTS = (
-    "api_key",
-    "authorization",
-    "awsaccesskeyid",
-    "bearer ",
-    "credential",
-    "password",
-    "passwd",
-    "secret",
-    "signature=",
-    "token=",
-    "x-amz-credential",
-    "x-amz-security-token",
-    "x-amz-signature",
-    "x-oss-signature",
+_QUERY_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9_])"
+    r"(?:api[_-]?key|authorization|credential|password|secret|signature|token)"
+    r"\s*[:=]\s*\S+"
 )
+_QUERY_BEARER_RE = re.compile(r"(?i)(?:^|[^A-Za-z0-9_])bearer\s+\S+")
 _PUBLIC_WARNING_CODES = frozenset(
     {
         "ATTACHMENT_CONTEXT_TRUNCATED",
@@ -458,8 +448,8 @@ def _sanitize_query_text(value: str) -> str:
         or _looks_like_local_path(decoded)
         or _contains_embedded_local_path(clean_text)
         or _contains_embedded_local_path(decoded)
-        or _contains_sensitive_url(clean_text)
-        or _contains_sensitive_url(decoded)
+        or _contains_query_secret_or_url(clean_text)
+        or _contains_query_secret_or_url(decoded)
     ):
         return ""
     return clean_text
@@ -649,9 +639,11 @@ def _contains_embedded_local_path(value: str) -> bool:
     )
 
 
-def _contains_sensitive_url(value: str) -> bool:
+def _contains_query_secret_or_url(value: str) -> bool:
     lowered = value.lower()
-    return (
-        ("http://" in lowered or "https://" in lowered)
-        and any(part in lowered for part in _QUERY_URL_SENSITIVE_PARTS)
+    return bool(
+        "http://" in lowered
+        or "https://" in lowered
+        or _QUERY_SECRET_ASSIGNMENT_RE.search(value)
+        or _QUERY_BEARER_RE.search(value)
     )

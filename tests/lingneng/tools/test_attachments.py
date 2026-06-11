@@ -546,6 +546,38 @@ def test_attachment_provider_request_includes_current_query_only(tmp_path):
 
 
 def test_attachment_provider_request_preserves_business_token_query(tmp_path):
+    query = "请分析 token 用量趋势"
+    provider = provider_for_query(tmp_path, query)
+
+    assert provider.requests[0].query == query
+
+
+def test_attachment_provider_request_preserves_business_exception_query(tmp_path):
+    query = "exception rate 趋势"
+    provider = provider_for_query(tmp_path, query)
+
+    assert provider.requests[0].query == query
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "请分析 https://example.com/report",
+        "password=abc123",
+        "Authorization: Bearer abc123",
+        "api%5Fkey%3Dabc123",
+    ],
+)
+def test_attachment_provider_request_clears_query_url_or_credentials(
+    tmp_path,
+    query,
+):
+    provider = provider_for_query(tmp_path, query)
+
+    assert provider.requests[0].query == ""
+
+
+def provider_for_query(tmp_path, query: str) -> FakeAttachmentProvider:
     provider = FakeAttachmentProvider(
         AttachmentProcessingResult(
             context_text="ok",
@@ -554,9 +586,9 @@ def test_attachment_provider_request_preserves_business_token_query(tmp_path):
         )
     )
     request = request_with_attachments(attachment())
-    request.query.content = "请分析 token 用量趋势"
+    request.query.content = query
 
     with attachment_processing_context(provider=provider):
         build_attachment_prompt_context(settings(tmp_path), request)
 
-    assert provider.requests[0].query == "请分析 token 用量趋势"
+    return provider

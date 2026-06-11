@@ -66,6 +66,9 @@ class LingNengSettings(BaseModel):
     skill_roots: list[Path] = Field(default_factory=list)
     skill_excerpt_max_chars: int = Field(default=4000, ge=500)
     skill_prompt_max_chars: int = Field(default=12000, ge=1000)
+    skill_read_max_chars: int = Field(default=12000, ge=1000)
+    skill_resource_max_chars: int = Field(default=12000, ge=1000)
+    skill_resource_max_bytes: int = Field(default=262144, ge=1024)
     rag_endpoint: str = ""
     rag_api_key: str = Field(default="", repr=False)
     rag_timeout_seconds: float = Field(default=5.0, ge=0.1)
@@ -129,6 +132,15 @@ class LingNengSettings(BaseModel):
             ),
             skill_prompt_max_chars=int(
                 source.get("LINGNENG_SKILL_PROMPT_MAX_CHARS", "12000")
+            ),
+            skill_read_max_chars=int(
+                source.get("LINGNENG_SKILL_READ_MAX_CHARS", "12000")
+            ),
+            skill_resource_max_chars=int(
+                source.get("LINGNENG_SKILL_RESOURCE_MAX_CHARS", "12000")
+            ),
+            skill_resource_max_bytes=int(
+                source.get("LINGNENG_SKILL_RESOURCE_MAX_BYTES", "262144")
             ),
             rag_endpoint=source.get("LINGNENG_RAG_ENDPOINT", ""),
             rag_api_key=source.get("LINGNENG_RAG_API_KEY", ""),

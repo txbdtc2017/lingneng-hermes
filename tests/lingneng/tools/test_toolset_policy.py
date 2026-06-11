@@ -8,6 +8,7 @@ from pathlib import Path
 import lingneng.tools.toolset  # noqa: F401
 import model_tools
 from lingneng.config.settings import LingNengSettings
+from lingneng.tools.skill_tools import skill_tool_context
 from lingneng.tools.stubs import LINGNENG_TOOL_NAMES, handler_for
 from lingneng.tools.web_search import lingneng_tool_context, web_search_context
 from model_tools import get_tool_definitions
@@ -29,15 +30,19 @@ APPROVED_LINGNENG_TOOLS = {
     "write_workspace",
 }
 
-REAL_PHASE_5_TOOLS = {
+REAL_PHASE_9_TOOLS = {
     "retrieve_rag",
+    "list_skills",
+    "search_skills",
+    "read_skill",
+    "read_skill_resource",
     "document_generation",
     "image_generation",
     "chart_visualization",
     "web_search",
 }
 
-STUB_ONLY_TOOLS = APPROVED_LINGNENG_TOOLS - REAL_PHASE_5_TOOLS
+STUB_ONLY_TOOLS = {"read_workspace", "write_workspace"}
 COLLIDING_LINGNENG_TOOL_NAMES = {"web_search"}
 
 DISALLOWED_HERMES_TOOLS = {
@@ -117,7 +122,8 @@ def test_lingneng_tool_registry_entries_are_registered():
 
 
 def test_lingneng_tool_definitions_expose_only_lingneng_schemas(tmp_path):
-    with lingneng_tool_context(settings(tmp_path)):
+    cfg = settings(tmp_path)
+    with lingneng_tool_context(cfg), skill_tool_context(cfg):
         definitions = get_tool_definitions(
             enabled_toolsets=["lingneng"],
             disabled_toolsets=["kanban"],
@@ -251,15 +257,33 @@ def test_retrieve_rag_registered_handler_is_not_phase_3_stub():
     assert result.get("phase") != "phase_3_stub"
 
 
-def test_phase_5_real_handlers_are_not_phase_3_stubs_when_unconfigured():
-    for tool_name in REAL_PHASE_5_TOOLS - {"retrieve_rag"}:
+def test_phase_9_real_handlers_are_not_phase_3_stubs_when_unconfigured():
+    args_by_tool = {
+        "retrieve_rag": {"query": "hello"},
+        "list_skills": {},
+        "search_skills": {"query": "hello"},
+        "read_skill": {"skill_id": "restaurant-campaign-planning"},
+        "read_skill_resource": {
+            "skill_id": "restaurant-campaign-planning",
+            "resource_id": "references/marketing-nodes.md",
+        },
+        "document_generation": {"instruction": "hello"},
+        "image_generation": {"prompt": "hello"},
+        "chart_visualization": {"instruction": "hello"},
+        "web_search": {"query": "hello"},
+    }
+
+    assert STUB_ONLY_TOOLS == {"read_workspace", "write_workspace"}
+
+    for tool_name in REAL_PHASE_9_TOOLS:
         if tool_name == "web_search":
             with web_search_context(settings(Path(".runtime/test")), provider=None):
-                result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
+                result = json.loads(
+                    registry.dispatch(tool_name, args_by_tool[tool_name])
+                )
         else:
-            result = json.loads(registry.dispatch(tool_name, {"query": "hello"}))
+            result = json.loads(registry.dispatch(tool_name, args_by_tool[tool_name]))
 
         assert result["success"] is False
         assert result["tool_name"] == tool_name
-        assert result["code"] == "NOT_CONFIGURED"
         assert result.get("phase") != "phase_3_stub"

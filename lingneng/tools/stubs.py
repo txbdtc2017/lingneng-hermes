@@ -21,6 +21,10 @@ LINGNENG_TOOL_NAMES = (
 
 REAL_TOOL_NAMES = (
     "retrieve_rag",
+    "list_skills",
+    "search_skills",
+    "read_skill",
+    "read_skill_resource",
     "document_generation",
     "image_generation",
     "chart_visualization",
@@ -78,30 +82,47 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "list_skills": _object_schema(
         "list_skills",
-        "List LingNeng employee skills. Phase 3 returns NOT_CONFIGURED.",
-        {"employee_type": _string("Optional employee type filter.")},
+        "List validated LingNeng bundled skills from the native skill catalog.",
+        {
+            "employee_type": _string("Optional employee type filter."),
+            "kind": _string(
+                "Optional skill kind: employee_base, task, capability, or infrastructure."
+            ),
+            "limit": _integer("Optional maximum number of skills to return.", minimum=1),
+        },
     ),
     "search_skills": _object_schema(
         "search_skills",
-        "Search LingNeng employee skills. Phase 3 returns NOT_CONFIGURED.",
+        "Search validated LingNeng bundled skills by query and metadata.",
         {
             "query": _string("Skill search query."),
             "employee_type": _string("Optional employee type filter."),
+            "kind": _string(
+                "Optional skill kind: employee_base, task, capability, or infrastructure."
+            ),
+            "limit": _integer("Optional maximum number of matches to return.", minimum=1),
         },
         ("query",),
     ),
     "read_skill": _object_schema(
         "read_skill",
-        "Read a LingNeng skill. Phase 3 returns NOT_CONFIGURED.",
-        {"skill_id": _string("Skill identifier.")},
+        "Read bounded instructions and resource manifest for a LingNeng skill.",
+        {
+            "skill_id": _string("Skill identifier."),
+            "max_chars": _integer("Optional maximum body characters to return.", minimum=1),
+        },
         ("skill_id",),
     ),
     "read_skill_resource": _object_schema(
         "read_skill_resource",
-        "Read a LingNeng skill resource. Phase 3 returns NOT_CONFIGURED.",
+        "Read a bounded manifest-listed LingNeng skill resource.",
         {
             "skill_id": _string("Skill identifier."),
             "resource_id": _string("Resource identifier."),
+            "max_chars": _integer(
+                "Optional maximum resource characters to return.",
+                minimum=1,
+            ),
         },
         ("skill_id", "resource_id"),
     ),

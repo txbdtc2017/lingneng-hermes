@@ -36,6 +36,9 @@ def test_environment_overrides_are_parsed(tmp_path):
             "LINGNENG_ARCHIVED_SESSION_RETENTION_DAYS": "181",
             "LINGNENG_IDEMPOTENCY_RETENTION_DAYS": "8",
             "LINGNENG_HEARTBEAT_INTERVAL_SECONDS": "12.5",
+            "LINGNENG_SKILL_READ_MAX_CHARS": "13000",
+            "LINGNENG_SKILL_RESOURCE_MAX_CHARS": "14000",
+            "LINGNENG_SKILL_RESOURCE_MAX_BYTES": "300000",
         }
     )
 
@@ -49,6 +52,9 @@ def test_environment_overrides_are_parsed(tmp_path):
     assert settings.archived_session_retention_days == 181
     assert settings.idempotency_retention_days == 8
     assert settings.heartbeat_interval_seconds == 12.5
+    assert settings.skill_read_max_chars == 13000
+    assert settings.skill_resource_max_chars == 14000
+    assert settings.skill_resource_max_bytes == 300000
 
 
 def test_from_env_none_reads_process_environment(monkeypatch, tmp_path):
@@ -153,6 +159,9 @@ def test_skill_and_rag_settings_defaults_are_safe(tmp_path):
     assert settings.skill_roots == []
     assert settings.skill_excerpt_max_chars == 4000
     assert settings.skill_prompt_max_chars == 12000
+    assert settings.skill_read_max_chars == 12000
+    assert settings.skill_resource_max_chars == 12000
+    assert settings.skill_resource_max_bytes == 262144
     assert settings.rag_endpoint == ""
     assert settings.rag_api_key == ""
     assert settings.rag_timeout_seconds == 5.0
@@ -272,6 +281,9 @@ def test_ready_summary_reports_phase_5_non_secret_counts(tmp_path):
     [
         ("LINGNENG_SKILL_EXCERPT_MAX_CHARS", "499"),
         ("LINGNENG_SKILL_PROMPT_MAX_CHARS", "999"),
+        ("LINGNENG_SKILL_READ_MAX_CHARS", "999"),
+        ("LINGNENG_SKILL_RESOURCE_MAX_CHARS", "999"),
+        ("LINGNENG_SKILL_RESOURCE_MAX_BYTES", "1023"),
         ("LINGNENG_RAG_TIMEOUT_SECONDS", "0.09"),
         ("LINGNENG_RAG_DEFAULT_TOP_K", "0"),
         ("LINGNENG_RAG_MAX_TOP_K", "0"),

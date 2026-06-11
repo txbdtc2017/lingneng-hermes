@@ -345,6 +345,40 @@ def test_retrieve_rag_sanitizes_json_shaped_raw_dump_metadata_values(tmp_path):
     assert "客户问套餐" not in dumped
 
 
+def test_retrieve_rag_sanitizes_common_local_path_metadata_values(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="file:///Volumes/private/rag.txt",
+            citations=[],
+            metadata={
+                "notes": [
+                    "/Volumes/private/rag.txt",
+                    "~/Library/Application Support/rag.txt",
+                    "../private/rag.txt",
+                    "Volume discount policy remains public",
+                ],
+            },
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["context"] == ""
+    assert result["metadata"]["notes"] == [
+        "",
+        "",
+        "",
+        "Volume discount policy remains public",
+    ]
+    assert "/Volumes" not in dumped
+    assert "~/Library" not in dumped
+    assert "../private" not in dumped
+    assert "file:///Volumes" not in dumped
+
+
 def test_retrieve_rag_sanitizes_citation_private_fields(tmp_path):
     provider = FakeRagProvider(
         RagRetrieveResult(

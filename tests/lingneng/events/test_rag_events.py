@@ -173,6 +173,44 @@ def test_rag_events_strip_json_shaped_raw_dump_metadata_values():
     assert citations == [CITATION]
 
 
+def test_rag_events_strip_common_local_path_metadata_values():
+    events, citations = rag_events_from_tool_result(
+        tool_name="retrieve_rag",
+        result=result_payload(
+            context="file:///Volumes/private/rag.txt",
+            metadata={
+                "selected_count": 1,
+                "notes": [
+                    "/Volumes/private/rag.txt",
+                    "~/Library/Application Support/rag.txt",
+                    "../private/rag.txt",
+                    "Volume discount policy remains public",
+                ],
+            },
+        ),
+        include_citations=True,
+        include_rag_context=True,
+    )
+
+    dumped = json.dumps(
+        [event.model_dump(mode="json") for event in events],
+        ensure_ascii=False,
+    )
+    assert [type(event) for event in events] == [CitationDeltaEvent, RagContextEvent]
+    assert events[1].context == ""
+    assert events[1].metadata["notes"] == [
+        "",
+        "",
+        "",
+        "Volume discount policy remains public",
+    ]
+    assert "/Volumes" not in dumped
+    assert "~/Library" not in dumped
+    assert "../private" not in dumped
+    assert "file:///Volumes" not in dumped
+    assert citations == [CITATION]
+
+
 def test_rag_empty_emits_empty_context_only_when_requested():
     events, citations = rag_events_from_tool_result(
         tool_name="retrieve_rag",

@@ -79,8 +79,13 @@ _PUBLIC_CITATION_FIELDS = frozenset(
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
 _LOCAL_ROOT_FRAGMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9._-])[\\/]+(?:Users|home|private|tmp|var|etc|opt|root)\b"
+    r"(?<![A-Za-z0-9._-])[\\/]+"
+    r"(?:Users|home|private|tmp|var|etc|opt|root|Volumes|Library|usr)\b",
+    re.IGNORECASE,
 )
+_HOME_PATH_FRAGMENT_RE = re.compile(r"(?<![A-Za-z0-9._-])~[\\/]")
+_PATH_TRAVERSAL_FRAGMENT_RE = re.compile(r"(?:^|[\s\\/])\.\.(?:[\\/]|$)")
+_LOCAL_FILE_URL_RE = re.compile(r"(?i)\bfile://")
 _CREDENTIAL_VALUE_RE = re.compile(
     r"(?i)"
     r"(api[_-]?key|authorization|bearer|credential|password|passwd|secret|signature|token)"
@@ -507,6 +512,9 @@ def _has_forbidden_public_text(value: str) -> bool:
         or _SECRET_TOKEN_FRAGMENT_RE.search(value) is not None
         or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
         or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
+        or _HOME_PATH_FRAGMENT_RE.search(value) is not None
+        or _PATH_TRAVERSAL_FRAGMENT_RE.search(value) is not None
+        or _LOCAL_FILE_URL_RE.search(value) is not None
         or _URL_CREDENTIALS_FRAGMENT_RE.search(value) is not None
         or "x-amz-signature" in lowered
         or "traceback" in lowered

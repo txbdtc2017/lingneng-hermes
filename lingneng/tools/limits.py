@@ -163,12 +163,15 @@ def _image_signature_payload(
 
 
 def _chart_signature_payload(args: dict[str, Any]) -> dict[str, Any]:
+    from lingneng.tools.chart_visualization import _build_chart_request
+
+    request = _build_chart_request(args)
     return {
-        "instruction_sha256": _sha256_text(_text(args.get("instruction"))),
-        "title": _text(args.get("title")),
-        "chart_type": _text(args.get("chart_type")),
-        "data_summary_sha256": _sha256_text(_text(args.get("data_summary"))),
-        "data_sha256": _stable_json_hash(args.get("data")),
+        "instruction_sha256": _sha256_text(request.instruction),
+        "title": request.title,
+        "chart_type": request.chart_type,
+        "data_summary_sha256": _sha256_text(request.data_summary),
+        "data_sha256": _stable_json_hash(request.data),
     }
 
 

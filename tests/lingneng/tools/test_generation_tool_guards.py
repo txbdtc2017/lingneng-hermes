@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.tools.chart_visualization import (
+    ChartVisualizationResult,
+    _build_chart_request,
+    chart_visualization_context,
+    chart_visualization_handler,
+)
 from lingneng.tools.document_generation import (
     DocumentGenerationResult,
     document_generation_context,
@@ -21,7 +27,11 @@ from lingneng.tools.web_search import (
     web_search_context,
     web_search_handler,
 )
-from tests.lingneng.tools.test_generation_tools import DOC_ARTIFACT, IMAGE_ARTIFACT
+from tests.lingneng.tools.test_generation_tools import (
+    CHART_ARTIFACT_WRONG_SOURCE,
+    DOC_ARTIFACT,
+    IMAGE_ARTIFACT,
+)
 
 
 def settings(tmp_path: Path, **overrides: str) -> LingNengSettings:
@@ -52,6 +62,19 @@ class CountingImageProvider:
         del request
         self.calls += 1
         return ImageGenerationResult(summary="ok", artifacts=[IMAGE_ARTIFACT])
+
+
+class CountingChartProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, request: Any) -> ChartVisualizationResult:
+        del request
+        self.calls += 1
+        return ChartVisualizationResult(
+            summary="ok",
+            artifacts=[CHART_ARTIFACT_WRONG_SOURCE],
+        )
 
 
 class CountingWebSearchProvider:
@@ -234,6 +257,43 @@ def test_image_signature_normalizes_default_and_clamped_count(tmp_path: Path) ->
     assert third["success"] is True
     assert fourth["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
     assert provider.calls == 2
+
+
+def test_chart_signature_uses_normalized_sanitized_request(tmp_path: Path) -> None:
+    cfg = settings(tmp_path, LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN="3")
+    provider = CountingChartProvider()
+    first_args = {
+        "instruction": "生成趋势图",
+        "title": "收入趋势",
+        "chart_type": "line",
+        "data": {
+            "rows": [
+                {"month": "Jan", "revenue": 10},
+                {"month": "Feb", "revenue": 20},
+            ],
+            "secret_token": "drop-a",
+        },
+    }
+    second_args = {
+        **first_args,
+        "data": {
+            "rows": [
+                {"month": "Jan", "revenue": 10},
+                {"month": "Feb", "revenue": 20},
+            ],
+            "secret_token": "drop-b",
+        },
+    }
+
+    assert _build_chart_request(first_args) == _build_chart_request(second_args)
+
+    with tool_run_guard_context(cfg), chart_visualization_context(cfg, provider=provider):
+        first = json.loads(chart_visualization_handler(first_args))
+        second = json.loads(chart_visualization_handler(second_args))
+
+    assert first["success"] is True
+    assert second["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert provider.calls == 1
 
 
 def test_web_search_signature_normalizes_default_and_clamped_top_k(

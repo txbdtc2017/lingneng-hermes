@@ -230,6 +230,7 @@ TOOLSETS = {
         ),
         "tools": [
             "retrieve_rag",
+            "employee_handoff",
             "list_skills",
             "search_skills",
             "read_skill",

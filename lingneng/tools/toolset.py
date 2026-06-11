@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from lingneng.tools.chart_visualization import chart_visualization_handler
 from lingneng.tools.document_generation import document_generation_handler
+from lingneng.tools.employee_handoff import employee_handoff_handler
 from lingneng.tools.image_generation import image_generation_handler
 from lingneng.tools.rag import retrieve_rag_handler
 from lingneng.tools.skill_tools import (
@@ -20,6 +21,7 @@ from tools.registry import registry
 
 _REAL_HANDLERS = {
     "retrieve_rag": retrieve_rag_handler,
+    "employee_handoff": employee_handoff_handler,
     "list_skills": list_skills_handler,
     "search_skills": search_skills_handler,
     "read_skill": read_skill_handler,

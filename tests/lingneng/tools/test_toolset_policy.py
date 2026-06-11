@@ -18,6 +18,7 @@ from tools.registry import ToolRegistry, registry
 
 APPROVED_LINGNENG_TOOLS = {
     "retrieve_rag",
+    "employee_handoff",
     "list_skills",
     "search_skills",
     "read_skill",
@@ -30,8 +31,9 @@ APPROVED_LINGNENG_TOOLS = {
     "write_workspace",
 }
 
-REAL_PHASE_9_TOOLS = {
+REAL_LINGNENG_TOOLS = {
     "retrieve_rag",
+    "employee_handoff",
     "list_skills",
     "search_skills",
     "read_skill",
@@ -257,9 +259,19 @@ def test_retrieve_rag_registered_handler_is_not_phase_3_stub():
     assert result.get("phase") != "phase_3_stub"
 
 
-def test_phase_9_real_handlers_are_not_phase_3_stubs_when_unconfigured():
+def test_employee_handoff_registered_handler_is_not_phase_3_stub():
+    result = json.loads(registry.dispatch("employee_handoff", {"action": "current"}))
+
+    assert result["success"] is False
+    assert result["tool_name"] == "employee_handoff"
+    assert result["code"] == "HANDOFF_CONTEXT_MISSING"
+    assert result.get("phase") != "phase_3_stub"
+
+
+def test_lingneng_real_handlers_are_not_phase_3_stubs_when_unconfigured():
     args_by_tool = {
         "retrieve_rag": {"query": "hello"},
+        "employee_handoff": {"action": "current"},
         "list_skills": {},
         "search_skills": {"query": "hello"},
         "read_skill": {"skill_id": "restaurant-campaign-planning"},
@@ -275,7 +287,7 @@ def test_phase_9_real_handlers_are_not_phase_3_stubs_when_unconfigured():
 
     assert STUB_ONLY_TOOLS == {"read_workspace", "write_workspace"}
 
-    for tool_name in REAL_PHASE_9_TOOLS:
+    for tool_name in REAL_LINGNENG_TOOLS:
         if tool_name == "web_search":
             with web_search_context(settings(Path(".runtime/test")), provider=None):
                 result = json.loads(

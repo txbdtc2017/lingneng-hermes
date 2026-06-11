@@ -7,6 +7,7 @@ from typing import Any
 
 LINGNENG_TOOL_NAMES = (
     "retrieve_rag",
+    "employee_handoff",
     "list_skills",
     "search_skills",
     "read_skill",
@@ -21,6 +22,7 @@ LINGNENG_TOOL_NAMES = (
 
 REAL_TOOL_NAMES = (
     "retrieve_rag",
+    "employee_handoff",
     "list_skills",
     "search_skills",
     "read_skill",
@@ -79,6 +81,47 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
         ("query",),
+    ),
+    "employee_handoff": _object_schema(
+        "employee_handoff",
+        "Validate and emit a LingNeng employee handoff decision.",
+        {
+            "action": {
+                "type": "string",
+                "description": "Handoff action: current, suggest, or confirm.",
+                "enum": ["current", "suggest", "confirm"],
+            },
+            "target_employee_type": _string("Target employee type when known."),
+            "confidence": {
+                "type": "number",
+                "description": "Decision confidence between 0 and 1.",
+                "minimum": 0,
+                "maximum": 1,
+            },
+            "reason": _string("Short public reason for the decision."),
+            "reply": _string("Public reply to show to the user for terminal handoff."),
+            "candidates": {
+                "type": "array",
+                "description": "Candidate employees for confirm action.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "employee_type": _string("Candidate employee type."),
+                        "confidence": {
+                            "type": "number",
+                            "description": "Candidate confidence between 0 and 1.",
+                            "minimum": 0,
+                            "maximum": 1,
+                        },
+                        "label": _string("Candidate display label."),
+                        "reason": _string("Public candidate reason."),
+                    },
+                    "required": ["employee_type", "confidence", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        ("action", "confidence", "reason"),
     ),
     "list_skills": _object_schema(
         "list_skills",

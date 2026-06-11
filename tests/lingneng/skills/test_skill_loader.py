@@ -122,6 +122,27 @@ def test_prompt_context_includes_recommended_skills_from_metadata(tmp_path):
     assert "image-generation" in prompt
 
 
+def test_invalid_configured_employee_override_does_not_suppress_bundled_base(
+    tmp_path,
+):
+    write_skill(
+        tmp_path,
+        "employee-marketing-content-creator",
+        kind="employee_base",
+        employee_type="marketing_content_creator",
+        display_name=None,
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request(""))
+    prompt = result.to_prompt_text()
+
+    assert result.employee_base is not None
+    assert result.employee_base.package_name == "employee-marketing-content-creator"
+    assert "内容创意师" in prompt
+    assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
+
+
 def test_prompt_context_guides_progressive_skill_reading(tmp_path):
     loader = LingNengSkillLoader(
         LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
@@ -150,6 +171,25 @@ def test_selects_explicit_skill_by_exact_package_name(tmp_path):
     assert result.selected_skill is not None
     assert result.selected_skill.package_name == "marketing-copy-generation"
     assert "写营销内容" in result.to_prompt_text()
+
+
+def test_invalid_configured_override_does_not_suppress_bundled_selected_skill(
+    tmp_path,
+):
+    write_skill(
+        tmp_path,
+        "marketing-copy-generation",
+        schema_version="2.0",
+    )
+    loader = LingNengSkillLoader(settings(tmp_path))
+
+    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    prompt = result.to_prompt_text()
+
+    assert result.selected_skill is not None
+    assert result.selected_skill.package_name == "marketing-copy-generation"
+    assert "用户要求内容创意师生成、改写或优化餐饮营销内容时使用" in prompt
+    assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
 def test_unknown_skill_id_skips_inline_content(tmp_path):
@@ -237,84 +277,92 @@ def test_prompt_does_not_include_absolute_package_path(tmp_path):
 
 
 def test_rejects_non_metadata_only_script_policy(tmp_path):
+    package_name = "invalid-script-policy-skill"
     write_skill(
         tmp_path,
-        "marketing-copy-generation",
+        package_name,
         script_policy="python",
     )
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    result = loader.build_prompt_context(request(package_name))
 
     assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
 def test_rejects_unsupported_lingneng_schema_version(tmp_path):
+    package_name = "invalid-schema-version-skill"
     write_skill(
         tmp_path,
-        "marketing-copy-generation",
+        package_name,
         schema_version="2.0",
     )
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    result = loader.build_prompt_context(request(package_name))
 
     assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
-def test_rejects_employee_base_without_display_name(tmp_path):
+def test_invalid_employee_base_without_display_name_degrades_without_loading(
+    tmp_path,
+):
+    package_name = "invalid-employee-base"
     write_skill(
         tmp_path,
-        "employee-marketing-content-creator",
+        package_name,
         kind="employee_base",
         employee_type="marketing_content_creator",
         display_name=None,
     )
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request())
+    result = loader.build_prompt_context(request(package_name))
 
-    assert result.employee_base is None
+    assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
 def test_invalid_utf8_skill_file_degrades_without_raising(tmp_path):
-    package = tmp_path / "marketing-copy-generation"
+    package_name = "invalid-utf8-skill"
+    package = tmp_path / package_name
     package.mkdir()
     (package / "SKILL.md").write_bytes(b"\xff\xfe\xfa")
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    result = loader.build_prompt_context(request(package_name))
 
     assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
 def test_missing_version_package_degrades_without_loading(tmp_path):
+    package_name = "missing-version-skill"
     write_skill(
         tmp_path,
-        "marketing-copy-generation",
+        package_name,
         version=None,
     )
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    result = loader.build_prompt_context(request(package_name))
 
     assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)
 
 
 def test_whitespace_version_package_degrades_without_loading(tmp_path):
+    package_name = "whitespace-version-skill"
     write_skill(
         tmp_path,
-        "marketing-copy-generation",
+        package_name,
         version='"   "',
     )
     loader = LingNengSkillLoader(settings(tmp_path))
 
-    result = loader.build_prompt_context(request("marketing-copy-generation"))
+    result = loader.build_prompt_context(request(package_name))
 
     assert result.selected_skill is None
     assert any(warning.code == "SKILL_PACKAGE_INVALID" for warning in result.warnings)

@@ -61,8 +61,6 @@ class LingNengSkillLoader:
         package_name = EMPLOYEE_BASE_SKILL_BY_TYPE.get(employee_type)
         if package_name is None:
             return None
-        if _has_package_load_warning(package_name, warnings):
-            return None
         package = packages.get(package_name)
         if package is None:
             warnings.append(
@@ -97,8 +95,6 @@ class LingNengSkillLoader:
         skill_id = request.skill.skill_id.strip()
         if not skill_id:
             return None
-        if _has_package_load_warning(skill_id, warnings):
-            return None
         package = packages.get(skill_id)
         if package is None:
             warnings.append(
@@ -129,17 +125,6 @@ class LingNengSkillLoader:
             tools=list(lingneng.tools),
             truncated=truncated,
         )
-
-
-def _has_package_load_warning(
-    package_name: str,
-    warnings: list[SkillPromptWarning],
-) -> bool:
-    return any(
-        warning.package_name == package_name
-        and warning.code in {"SKILL_PACKAGE_INACTIVE", "SKILL_PACKAGE_INVALID"}
-        for warning in warnings
-    )
 
 
 def _bounded_excerpt(text: str, max_chars: int) -> tuple[str, bool]:

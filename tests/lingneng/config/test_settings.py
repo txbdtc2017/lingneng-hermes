@@ -332,6 +332,60 @@ def test_phase_12_provider_settings_from_env_are_secret_safe(tmp_path):
     assert "redis-secret" not in dumped
 
 
+def test_phase_13_attachment_provider_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+    assert settings.attachment_provider == ""
+    assert settings.attachment_http_endpoint == ""
+    assert settings.attachment_http_api_key == ""
+    assert settings.attachment_http_timeout_seconds == 30.0
+    assert settings.attachment_http_max_response_bytes == 1048576
+    assert settings.attachment_local_text_max_bytes == 2097152
+    assert settings.attachment_local_text_max_chars_per_file == 12000
+    assert settings.attachment_selected_chunk_limit == 4
+    assert settings.attachment_chunk_size == 3000
+    assert settings.attachment_chunk_overlap == 300
+    assert settings.attachment_provider_configured is False
+    assert settings.attachment_http_provider_configured is False
+    assert settings.attachment_local_text_provider_configured is False
+
+    summary = settings.ready_summary()
+    assert summary["attachment_provider_configured"] is False
+    assert summary["attachment_http_provider_configured"] is False
+    assert summary["attachment_local_text_provider_configured"] is False
+
+
+def test_phase_13_attachment_provider_settings_from_env_are_secret_safe(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_ATTACHMENT_PROVIDER": "http",
+            "LINGNENG_ATTACHMENT_HTTP_ENDPOINT": "https://attachments.example/process",
+            "LINGNENG_ATTACHMENT_HTTP_API_KEY": "attachment-secret",
+            "LINGNENG_ATTACHMENT_HTTP_TIMEOUT_SECONDS": "9",
+            "LINGNENG_ATTACHMENT_HTTP_MAX_RESPONSE_BYTES": "2048",
+            "LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_BYTES": "1024",
+            "LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_CHARS_PER_FILE": "1000",
+            "LINGNENG_ATTACHMENT_SELECTED_CHUNK_LIMIT": "2",
+            "LINGNENG_ATTACHMENT_CHUNK_SIZE": "700",
+            "LINGNENG_ATTACHMENT_CHUNK_OVERLAP": "50",
+        }
+    )
+
+    assert settings.attachment_provider_configured is True
+    assert settings.attachment_http_provider_configured is True
+    assert settings.attachment_local_text_provider_configured is False
+    assert settings.attachment_http_timeout_seconds == 9.0
+    assert settings.attachment_http_max_response_bytes == 2048
+    assert settings.attachment_local_text_max_bytes == 1024
+    assert settings.attachment_local_text_max_chars_per_file == 1000
+    assert settings.attachment_selected_chunk_limit == 2
+    assert settings.attachment_chunk_size == 700
+    assert settings.attachment_chunk_overlap == 50
+    assert "attachment-secret" not in repr(settings)
+    assert "attachment-secret" not in repr(settings.ready_summary())
+
+
 def test_skill_roots_parse_json_comma_and_newline(tmp_path):
     first = tmp_path / "employees"
     second = tmp_path / "tasks"
@@ -463,6 +517,13 @@ def test_route_settings_reject_values_below_spec_minimums(
         ("LINGNENG_ATTACHMENT_MAX_IMAGE_BYTES", "-1"),
         ("LINGNENG_ATTACHMENT_TIMEOUT_SECONDS", "0.09"),
         ("LINGNENG_ATTACHMENT_CONTEXT_MAX_CHARS", "499"),
+        ("LINGNENG_ATTACHMENT_HTTP_TIMEOUT_SECONDS", "0.09"),
+        ("LINGNENG_ATTACHMENT_HTTP_MAX_RESPONSE_BYTES", "1023"),
+        ("LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_BYTES", "0"),
+        ("LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_CHARS_PER_FILE", "499"),
+        ("LINGNENG_ATTACHMENT_SELECTED_CHUNK_LIMIT", "0"),
+        ("LINGNENG_ATTACHMENT_CHUNK_SIZE", "499"),
+        ("LINGNENG_ATTACHMENT_CHUNK_OVERLAP", "-1"),
         ("LINGNENG_TIME_CONTEXT_PROMPT_MAX_CHARS", "499"),
         ("LINGNENG_PROMPT_SECTION_MAX_CHARS", "499"),
     ],

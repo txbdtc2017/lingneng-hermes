@@ -94,6 +94,16 @@ class LingNengSettings(BaseModel):
     attachment_max_image_bytes: int = Field(default=10485760, ge=0)
     attachment_timeout_seconds: float = Field(default=30.0, ge=0.1)
     attachment_context_max_chars: int = Field(default=6000, ge=500)
+    attachment_provider: str = ""
+    attachment_http_endpoint: str = ""
+    attachment_http_api_key: str = Field(default="", repr=False)
+    attachment_http_timeout_seconds: float = Field(default=30.0, ge=0.1)
+    attachment_http_max_response_bytes: int = Field(default=1048576, ge=1024)
+    attachment_local_text_max_bytes: int = Field(default=2097152, ge=1)
+    attachment_local_text_max_chars_per_file: int = Field(default=12000, ge=500)
+    attachment_selected_chunk_limit: int = Field(default=4, ge=1)
+    attachment_chunk_size: int = Field(default=3000, ge=500)
+    attachment_chunk_overlap: int = Field(default=300, ge=0)
     time_context_enabled: bool = True
     time_context_default_timezone: str = "Asia/Shanghai"
     time_context_default_region: str = "CN"
@@ -247,6 +257,36 @@ class LingNengSettings(BaseModel):
             attachment_context_max_chars=int(
                 source.get("LINGNENG_ATTACHMENT_CONTEXT_MAX_CHARS", "6000")
             ),
+            attachment_provider=source.get("LINGNENG_ATTACHMENT_PROVIDER", ""),
+            attachment_http_endpoint=source.get(
+                "LINGNENG_ATTACHMENT_HTTP_ENDPOINT", ""
+            ),
+            attachment_http_api_key=source.get(
+                "LINGNENG_ATTACHMENT_HTTP_API_KEY", ""
+            ),
+            attachment_http_timeout_seconds=float(
+                source.get("LINGNENG_ATTACHMENT_HTTP_TIMEOUT_SECONDS", "30.0")
+            ),
+            attachment_http_max_response_bytes=int(
+                source.get("LINGNENG_ATTACHMENT_HTTP_MAX_RESPONSE_BYTES", "1048576")
+            ),
+            attachment_local_text_max_bytes=int(
+                source.get("LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_BYTES", "2097152")
+            ),
+            attachment_local_text_max_chars_per_file=int(
+                source.get(
+                    "LINGNENG_ATTACHMENT_LOCAL_TEXT_MAX_CHARS_PER_FILE", "12000"
+                )
+            ),
+            attachment_selected_chunk_limit=int(
+                source.get("LINGNENG_ATTACHMENT_SELECTED_CHUNK_LIMIT", "4")
+            ),
+            attachment_chunk_size=int(
+                source.get("LINGNENG_ATTACHMENT_CHUNK_SIZE", "3000")
+            ),
+            attachment_chunk_overlap=int(
+                source.get("LINGNENG_ATTACHMENT_CHUNK_OVERLAP", "300")
+            ),
             time_context_enabled=_bool_from_env(
                 source.get("LINGNENG_TIME_CONTEXT_ENABLED"), True
             ),
@@ -362,6 +402,24 @@ class LingNengSettings(BaseModel):
             and bool(self.aigc_redis_url.strip())
         )
 
+    @property
+    def attachment_http_provider_configured(self) -> bool:
+        return (
+            self.attachment_provider.strip().lower() == "http"
+            and bool(self.attachment_http_endpoint.strip())
+        )
+
+    @property
+    def attachment_local_text_provider_configured(self) -> bool:
+        return self.attachment_provider.strip().lower() == "local_text"
+
+    @property
+    def attachment_provider_configured(self) -> bool:
+        return (
+            self.attachment_http_provider_configured
+            or self.attachment_local_text_provider_configured
+        )
+
     def ready_summary(self) -> dict[str, object]:
         return {
             "status": "ready"
@@ -382,4 +440,11 @@ class LingNengSettings(BaseModel):
             "document_provider_configured": self.document_provider_configured,
             "image_provider_configured": self.image_provider_configured,
             "aigc_result_store_configured": self.aigc_result_store_configured,
+            "attachment_provider_configured": self.attachment_provider_configured,
+            "attachment_http_provider_configured": (
+                self.attachment_http_provider_configured
+            ),
+            "attachment_local_text_provider_configured": (
+                self.attachment_local_text_provider_configured
+            ),
         }

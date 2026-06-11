@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any
+from typing import Any, TypeVar
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.chart_visualization import ChartVisualizationProvider
 from lingneng.tools.document_generation import DocumentGenerationProvider
 from lingneng.tools.image_generation import ImageGenerationProvider
 from lingneng.tools.web_search import WebSearchProvider
+
+
+_LOGGER = logging.getLogger(__name__)
+_ProviderT = TypeVar("_ProviderT")
 
 
 @dataclass(frozen=True)
@@ -45,7 +51,10 @@ def build_web_search_provider(settings: LingNengSettings) -> WebSearchProvider |
     )
     if provider_class is None:
         return None
-    return provider_class(settings)
+    return _construct_provider(
+        "web_search",
+        lambda: provider_class(settings),
+    )
 
 
 def build_document_generation_provider(
@@ -61,7 +70,10 @@ def build_document_generation_provider(
     )
     if provider_class is None:
         return None
-    return provider_class.from_settings(settings)
+    return _construct_provider(
+        "document_generation",
+        lambda: provider_class.from_settings(settings),
+    )
 
 
 def build_image_generation_provider(
@@ -75,7 +87,10 @@ def build_image_generation_provider(
     )
     if provider_class is None:
         return None
-    return provider_class.from_settings(settings)
+    return _construct_provider(
+        "image_generation",
+        lambda: provider_class.from_settings(settings),
+    )
 
 
 def build_chart_visualization_provider(
@@ -91,10 +106,27 @@ def build_chart_visualization_provider(
     )
     if provider_class is None:
         return None
-    return provider_class(
-        settings=settings,
-        image_provider=image_provider,
+    return _construct_provider(
+        "chart_visualization",
+        lambda: provider_class(
+            settings=settings,
+            image_provider=image_provider,
+        ),
     )
+
+
+def _construct_provider(
+    provider_name: str,
+    factory: Callable[[], _ProviderT],
+) -> _ProviderT | None:
+    try:
+        return factory()
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng %s provider construction failed; provider disabled.",
+            provider_name,
+        )
+        return None
 
 
 def _optional_provider_class(module_name: str, class_name: str) -> Any | None:

@@ -231,6 +231,54 @@ def test_provider_factory_builds_bocha_provider(tmp_path):
     assert provider.__class__.__name__ == "BochaWebSearchProvider"
 
 
+def test_provider_factory_fail_closes_single_provider_build_failure(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    from lingneng.tools.image_provider import RedisAigcResultStore
+
+    def fail_from_settings(cls, settings):
+        del cls, settings
+        raise ValueError(
+            "redis://:redis-secret@redis.example/0 token=secret-token"
+        )
+
+    monkeypatch.setattr(
+        RedisAigcResultStore,
+        "from_settings",
+        classmethod(fail_from_settings),
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.tools.providers"):
+        providers = build_lingneng_tool_providers(
+            settings(
+                tmp_path,
+                LINGNENG_WEB_SEARCH_PROVIDER="bocha",
+                LINGNENG_BOCHA_WEB_SEARCH_API_KEY="bocha-secret",
+                LINGNENG_DOCUMENT_PROVIDER="java_file",
+                LINGNENG_JAVA_AGENT_FILE_BASE_URL="https://java.example.test",
+                LINGNENG_JAVA_INTERNAL_KEY="java-secret",
+                LINGNENG_IMAGE_PROVIDER="aigc",
+                LINGNENG_AIGC_IMAGE_BASE_URL="https://aigc.example.test",
+                LINGNENG_AIGC_RESULT_STORE="redis",
+                LINGNENG_AIGC_REDIS_URL="redis://:redis-secret@redis.example/0",
+            )
+        )
+
+    assert providers.web_search.__class__.__name__ == "BochaWebSearchProvider"
+    assert providers.document_generation.__class__.__name__ == "JavaFileDocumentProvider"
+    assert providers.image_generation is None
+    assert providers.chart_visualization is None
+    assert "image_generation" in caplog.text
+    dumped_logs = caplog.text
+    assert "redis-secret" not in dumped_logs
+    assert "secret-token" not in dumped_logs
+    assert "bocha-secret" not in dumped_logs
+    assert "java-secret" not in dumped_logs
+    assert "redis://" not in dumped_logs
+
+
 def test_document_source_helpers_match_lingneng_business_behavior():
     assert (
         build_document_source_markdown(

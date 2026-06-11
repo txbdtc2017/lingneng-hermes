@@ -18,7 +18,12 @@ from lingneng.context.prompt import (
 from lingneng.context.time import CurrentTimeContext, TimeContextService
 from lingneng.runtime.fake_agent import FakeAgentRunAdapter
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
-from lingneng.schemas.chat_events import AgentStepEvent, ArtifactCreatedEvent, FinalEvent
+from lingneng.schemas.chat_events import (
+    AgentStepEvent,
+    ArtifactCreatedEvent,
+    ErrorEvent,
+    FinalEvent,
+)
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from lingneng.session.run_store import LingNengRunStore
@@ -113,6 +118,54 @@ async def test_hermes_adapter_passes_resolved_runtime_config_to_agent(
     assert kwargs["base_url"] == "http://172.16.10.10:18400/v1"
     assert kwargs["api_mode"] == "chat_completions"
     assert kwargs["api_key"] == "sk-test-runtime-key"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_continues_when_optional_provider_build_fails(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    from lingneng.tools.image_provider import RedisAigcResultStore
+
+    def fail_from_settings(cls, settings):
+        del cls, settings
+        raise ValueError(
+            "redis://:redis-secret@redis.example/0 token=secret-token"
+        )
+
+    monkeypatch.setattr(
+        RedisAigcResultStore,
+        "from_settings",
+        classmethod(fail_from_settings),
+    )
+    CapturingAgent.calls = []
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_IMAGE_PROVIDER="aigc",
+            LINGNENG_AIGC_IMAGE_BASE_URL="https://aigc.example.test",
+            LINGNENG_AIGC_RESULT_STORE="redis",
+            LINGNENG_AIGC_REDIS_URL="redis://:redis-secret@redis.example/0",
+        ),
+        agent_cls=CapturingAgent,
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.tools.providers"):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert CapturingAgent.calls
+    assert isinstance(events[-1], FinalEvent)
+    assert events[-1].answer == "完成"
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    dumped_logs = caplog.text
+    assert "image_generation" in dumped_logs
+    assert "redis-secret" not in dumped_logs
+    assert "secret-token" not in dumped_logs
+    assert "redis://" not in dumped_logs
 
 
 def test_runtime_package_import_does_not_load_run_agent():

@@ -447,6 +447,42 @@ def test_ready_summary_hides_rag_api_key(tmp_path):
     assert "secret-rag-key" not in repr(summary)
 
 
+def test_phase_14_rag_hardening_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+    assert settings.rag_http_max_response_bytes == 1048576
+    assert settings.rag_live_test_enabled is False
+    assert settings.rag_live_test_query == ""
+
+    summary = settings.ready_summary()
+    assert summary["rag_configured"] is False
+    assert summary["rag_http_max_response_bytes"] == 1048576
+    assert summary["rag_live_test_enabled"] is False
+    assert "rag_live_test_query" not in summary
+
+
+def test_phase_14_rag_hardening_settings_from_env_are_secret_safe(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve?token=url-token",
+            "LINGNENG_RAG_API_KEY": "secret-rag-key",
+            "LINGNENG_RAG_HTTP_MAX_RESPONSE_BYTES": "2048",
+            "LINGNENG_RAG_LIVE_TEST_ENABLED": "true",
+            "LINGNENG_RAG_LIVE_TEST_QUERY": "secret live query",
+        }
+    )
+
+    assert settings.rag_http_max_response_bytes == 2048
+    assert settings.rag_live_test_enabled is True
+    assert settings.rag_live_test_query == "secret live query"
+
+    dumped = repr(settings.ready_summary())
+    assert "secret-rag-key" not in dumped
+    assert "secret live query" not in dumped
+    assert "url-token" not in dumped
+
+
 def test_ready_summary_reports_phase_5_non_secret_counts(tmp_path):
     settings = LingNengSettings.from_env(
         {
@@ -478,6 +514,7 @@ def test_ready_summary_reports_phase_5_non_secret_counts(tmp_path):
         ("LINGNENG_RAG_DEFAULT_TOP_K", "0"),
         ("LINGNENG_RAG_MAX_TOP_K", "0"),
         ("LINGNENG_RAG_CONTEXT_MAX_CHARS", "499"),
+        ("LINGNENG_RAG_HTTP_MAX_RESPONSE_BYTES", "1023"),
     ],
 )
 def test_skill_and_rag_settings_reject_values_below_spec_minimums(

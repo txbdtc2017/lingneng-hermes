@@ -104,6 +104,7 @@ _PUBLIC_FAILURE_CODES = frozenset(
         "NOT_CONFIGURED",
         "RAG_PROVIDER_ERROR",
         "RAG_PROVIDER_INVALID_RESULT",
+        "RAG_PROVIDER_TIMEOUT",
     }
 )
 
@@ -268,6 +269,7 @@ def _public_error_message(code: str) -> str:
         "INVALID_RAG_QUERY": "LingNeng RAG query is invalid.",
         "NOT_CONFIGURED": "LingNeng RAG provider is not configured.",
         "RAG_PROVIDER_ERROR": "LingNeng RAG provider failed.",
+        "RAG_PROVIDER_TIMEOUT": "LingNeng RAG provider timed out.",
     }
     return messages.get(code, "LingNeng RAG retrieval failed.")
 

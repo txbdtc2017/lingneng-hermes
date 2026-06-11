@@ -358,6 +358,28 @@ def test_retrieve_rag_failed_provider_code_is_sanitized(tmp_path):
     assert "需要资料" not in dumped
 
 
+def test_retrieve_rag_timeout_failure_code_is_public(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="failed",
+            context="traceback secret-token",
+            citations=[],
+            metadata={"authorization": "Bearer secret"},
+            code="RAG_PROVIDER_TIMEOUT",
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["success"] is False
+    assert result["code"] == "RAG_PROVIDER_TIMEOUT"
+    assert result["message"] == "LingNeng RAG provider timed out."
+    assert "secret-token" not in dumped
+    assert "Bearer" not in dumped
+
+
 def test_retrieve_rag_http_provider_uses_endpoint_without_live_network(
     tmp_path, monkeypatch
 ):

@@ -79,6 +79,9 @@ class LingNengSettings(BaseModel):
     rag_default_top_k: int = Field(default=5, ge=1)
     rag_max_top_k: int = Field(default=20, ge=1)
     rag_context_max_chars: int = Field(default=6000, ge=500)
+    rag_http_max_response_bytes: int = Field(default=1048576, ge=1024)
+    rag_live_test_enabled: bool = False
+    rag_live_test_query: str = Field(default="", repr=False)
     artifact_public_base_url: str = ""
     artifact_url_allowed_hosts: list[str] = Field(default_factory=list)
     tool_result_max_chars: int = Field(default=6000, ge=500)
@@ -214,6 +217,14 @@ class LingNengSettings(BaseModel):
             rag_context_max_chars=int(
                 source.get("LINGNENG_RAG_CONTEXT_MAX_CHARS", "6000")
             ),
+            rag_http_max_response_bytes=int(
+                source.get("LINGNENG_RAG_HTTP_MAX_RESPONSE_BYTES", "1048576")
+            ),
+            rag_live_test_enabled=_bool_from_env(
+                source.get("LINGNENG_RAG_LIVE_TEST_ENABLED"),
+                default=False,
+            ),
+            rag_live_test_query=source.get("LINGNENG_RAG_LIVE_TEST_QUERY", ""),
             artifact_public_base_url=source.get(
                 "LINGNENG_ARTIFACT_PUBLIC_BASE_URL", ""
             ),
@@ -433,6 +444,8 @@ class LingNengSettings(BaseModel):
             "auth_required": self.auth_required,
             "skill_root_count": len(self.skill_roots),
             "rag_configured": bool(self.rag_endpoint),
+            "rag_http_max_response_bytes": self.rag_http_max_response_bytes,
+            "rag_live_test_enabled": self.rag_live_test_enabled,
             "artifact_url_allow_list_count": len(self.artifact_url_allowed_hosts),
             "attachment_host_allow_list_count": len(self.attachment_allowed_hosts),
             "time_context_enabled": self.time_context_enabled,

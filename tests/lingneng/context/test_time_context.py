@@ -9,8 +9,12 @@ from lingneng.context.time import (
     CalendarEventConfig,
     CurrentTimeContext,
     FestivalCalendarRepository,
+    TimeContextService,
     TimeContextEvent,
+    determine_time_context_scope,
 )
+from lingneng.schemas.chat_request import ChatStreamRequest
+from tests.lingneng.schemas.test_chat_request_schema import full_payload
 
 
 def settings(tmp_path, **overrides):
@@ -35,16 +39,17 @@ def test_calendar_model_rejects_invalid_solar_event():
 
 
 def test_calendar_model_rejects_impossible_solar_date():
-    with pytest.raises(ValidationError):
-        CalendarEventConfig(
-            id="bad_date",
-            name="坏日期",
-            category="marketing_event",
-            calendar="solar",
-            month=2,
-            day=31,
-            marketing_hint="坏日期",
-        )
+    for month, day in ((2, 31), (2, 29)):
+        with pytest.raises(ValidationError):
+            CalendarEventConfig(
+                id="bad_date",
+                name="坏日期",
+                category="marketing_event",
+                calendar="solar",
+                month=month,
+                day=day,
+                marketing_hint="坏日期",
+            )
 
 
 def test_calendar_model_rejects_invalid_explicit_date_and_employee_type():
@@ -158,3 +163,148 @@ def test_current_time_context_trace_summary_is_sanitized():
         "timezone": "Asia/Shanghai",
         "region": "CN",
     }
+
+
+def request(
+    query="未来30天有什么营销节点",
+    employee_type="marketing_planner",
+    **runtime,
+) -> ChatStreamRequest:
+    payload = full_payload()
+    payload["query"]["content"] = query
+    payload["employee"]["employee_type"] = employee_type
+    payload["runtime_context"].update(runtime)
+    return ChatStreamRequest.model_validate(payload)
+
+
+def test_time_context_scope_detection():
+    assert determine_time_context_scope("今天适合做什么活动") == "today"
+    assert determine_time_context_scope("未来30天有什么营销节点") == "upcoming_30_days"
+    assert determine_time_context_scope("帮我写一段文案") == "today"
+
+
+def test_time_service_builds_upcoming_context_with_bundled_events(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(request("未来30天有什么营销节点"))
+
+    assert context.current_date == "2026-06-11"
+    assert context.weekday_cn == "周四"
+    assert context.scope == "upcoming_30_days"
+    assert context.timezone == "Asia/Shanghai"
+    assert context.region == "CN"
+    assert [event.id for event in context.events][:2] == [
+        "internet_618",
+        "dragon_boat_festival",
+    ]
+    assert context.events[0].focus_level == "primary"
+
+
+def test_time_service_degrades_invalid_timezone_and_region(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(
+        request(
+            "未来30天有什么营销节点",
+            timezone="Invalid/Timezone",
+            region="US",
+        )
+    )
+
+    assert context.timezone == "Asia/Shanghai"
+    assert context.region == "CN"
+    assert "TIMEZONE_FALLBACK_TO_DEFAULT" in context.warnings
+    assert "REGION_FALLBACK_TO_DEFAULT" in context.warnings
+
+
+def test_time_service_degrades_value_error_timezone_and_bad_default(tmp_path):
+    service = TimeContextService(
+        settings(
+            tmp_path,
+            LINGNENG_TIME_CONTEXT_DEFAULT_TIMEZONE=".",
+        ),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(request("未来30天有什么营销节点", timezone="."))
+
+    assert context.timezone == "Asia/Shanghai"
+    assert "TIMEZONE_FALLBACK_TO_DEFAULT" in context.warnings
+
+
+def test_time_service_uses_naive_now_provider_with_requested_timezone(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: datetime(2026, 6, 11, 10, 30),
+    )
+
+    context = service.build(request("未来30天有什么营销节点"))
+
+    assert context.current_datetime == "2026-06-11T10:30:00+08:00"
+
+
+def test_time_service_filters_events_by_employee_type(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(
+        request(
+            "未来30天有什么营销节点",
+            employee_type="operation_specialist",
+        )
+    )
+
+    assert "internet_618" not in {event.id for event in context.events}
+
+
+def test_query_mention_boosts_matching_event(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(request("父亲节做什么活动"))
+
+    assert context.scope == "upcoming_30_days"
+    assert context.events[0].id == "fathers_day"
+    assert context.events[0].date == "2026-06-21"
+    assert context.events[0].focus_level == "primary"
+    assert "明确提到" in context.events[0].priority_reason
+
+
+def test_business_terms_do_not_count_as_explicit_event_mentions(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(request("家庭消费怎么做会员运营"))
+
+    assert context.scope == "today"
+    assert "fathers_day" not in {event.id for event in context.events}
+
+
+def test_time_service_respects_max_events_setting(tmp_path):
+    service = TimeContextService(
+        settings(tmp_path, LINGNENG_TIME_CONTEXT_MAX_EVENTS="1"),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    context = service.build(request("未来30天有什么营销节点"))
+
+    assert [event.id for event in context.events] == ["internet_618"]
+
+    disabled_events_service = TimeContextService(
+        settings(tmp_path, LINGNENG_TIME_CONTEXT_MAX_EVENTS="0"),
+        now_provider=lambda timezone_info: frozen_now(),
+    )
+
+    assert disabled_events_service.build(request("未来30天有什么营销节点")).events == []

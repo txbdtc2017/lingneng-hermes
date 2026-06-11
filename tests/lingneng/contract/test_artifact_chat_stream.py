@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import lingneng.runtime.hermes_adapter as hermes_adapter_module
 from lingneng.api.app import create_app
 from lingneng.config.settings import LingNengSettings
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
 from lingneng.session.run_store import LingNengRunStore
-from lingneng.tools.document_generation import (
-    DocumentGenerationResult,
-    document_generation_context,
-)
+from lingneng.tools.document_generation import DocumentGenerationResult
 from tests.lingneng.api.test_chat_stream_contract import parse_sse
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
 from tools.registry import registry
@@ -40,6 +38,14 @@ class FakeDocumentProvider:
             artifacts=[ARTIFACT],
             safe_output={"artifact_count": 1},
         )
+
+
+class FakeProviders:
+    def __init__(self, document_provider):
+        self.document_generation = document_provider
+        self.image_generation = None
+        self.chart_visualization = None
+        self.web_search = None
 
 
 class ContractArtifactAgent:
@@ -101,9 +107,18 @@ def settings(tmp_path) -> LingNengSettings:
     )
 
 
-def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(tmp_path):
+def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(
+    tmp_path,
+    monkeypatch,
+):
     ContractArtifactAgent.calls = 0
     resolved_settings = settings(tmp_path)
+    document_provider = FakeDocumentProvider()
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_lingneng_tool_providers",
+        lambda settings: FakeProviders(document_provider),
+    )
     adapter = CountingAdapter(
         HermesAgentRunAdapter(
             settings=resolved_settings,
@@ -120,15 +135,11 @@ def test_artifact_chat_stream_contract_persists_and_replays_final_artifacts(tmp_
     payload = full_payload()
     payload["attachments"] = []
 
-    with document_generation_context(
-        resolved_settings,
-        provider=FakeDocumentProvider(),
-    ):
-        first = client.post(
-            "/internal/agent/chat/stream",
-            json=payload,
-            headers={"X-Internal-Key": INTERNAL_KEY},
-        )
+    first = client.post(
+        "/internal/agent/chat/stream",
+        json=payload,
+        headers={"X-Internal-Key": INTERNAL_KEY},
+    )
 
     assert first.status_code == 200
     assert first.headers["content-type"].startswith("text/event-stream")

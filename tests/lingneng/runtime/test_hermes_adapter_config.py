@@ -18,7 +18,7 @@ from lingneng.context.prompt import (
 from lingneng.context.time import CurrentTimeContext, TimeContextService
 from lingneng.runtime.fake_agent import FakeAgentRunAdapter
 from lingneng.runtime.hermes_adapter import HermesAgentRunAdapter
-from lingneng.schemas.chat_events import AgentStepEvent, FinalEvent
+from lingneng.schemas.chat_events import AgentStepEvent, ArtifactCreatedEvent, FinalEvent
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import resolve_session_key
 from lingneng.session.run_store import LingNengRunStore
@@ -1412,6 +1412,42 @@ class DispatchingSkillToolAgent(RecordingSystemPromptAgent):
         return {"final_response": "完成", "messages": []}
 
 
+class ToolDispatchingAgent(RecordingSystemPromptAgent):
+    dispatched_results: list[str] = []
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        from tools.registry import registry
+
+        type(self).system_message_seen = system_message or ""
+        result = registry.dispatch(
+            "document_generation",
+            {"title": "报告", "content": "正文"},
+        )
+        type(self).dispatched_results.append(result)
+        if self.tool_progress_callback:
+            self.tool_progress_callback(
+                "tool.completed",
+                "document_generation",
+                None,
+                None,
+                is_error=False,
+                result=result,
+            )
+        return {"final_response": "完成", "messages": []}
+
+
 @pytest.mark.asyncio
 async def test_hermes_adapter_sets_skill_tool_context_for_agent_tool_dispatch(
     tmp_path,
@@ -1441,3 +1477,94 @@ async def test_hermes_adapter_sets_skill_tool_context_for_agent_tool_dispatch(
     assert result["tool_name"] == "read_skill"
     assert result["safe_output"]["skill"]["package_name"] == "custom-phase9-skill"
     assert "CUSTOM PHASE 9 BODY" in result["safe_output"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_enters_configured_business_provider_contexts(
+    tmp_path,
+    monkeypatch,
+):
+    from lingneng.tools.document_generation import DocumentGenerationResult
+    from tests.lingneng.tools.test_generation_tools import DOC_ARTIFACT
+
+    class FakeDocumentProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, request):
+            del request
+            self.calls += 1
+            return DocumentGenerationResult(summary="ok", artifacts=[DOC_ARTIFACT])
+
+    class FakeProviders:
+        def __init__(self):
+            self.document_generation = FakeDocumentProvider()
+            self.image_generation = None
+            self.chart_visualization = None
+            self.web_search = None
+
+    providers = FakeProviders()
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_lingneng_tool_providers",
+        lambda settings: providers,
+        raising=False,
+    )
+    ToolDispatchingAgent.dispatched_results = []
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=ToolDispatchingAgent,
+    )
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert providers.document_generation.calls == 1
+    assert any(isinstance(event, ArtifactCreatedEvent) for event in events)
+    final = events[-1]
+    assert isinstance(final, FinalEvent)
+    assert final.artifacts[0].artifact_id == "artifact-doc-1"
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_tool_guard_isolated_per_stream(tmp_path, monkeypatch):
+    from lingneng.tools.document_generation import DocumentGenerationResult
+    from tests.lingneng.tools.test_generation_tools import DOC_ARTIFACT
+
+    class CountingProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, request):
+            del request
+            self.calls += 1
+            return DocumentGenerationResult(summary="ok", artifacts=[DOC_ARTIFACT])
+
+    class Providers:
+        def __init__(self, provider):
+            self.document_generation = provider
+            self.image_generation = None
+            self.chart_visualization = None
+            self.web_search = None
+
+    provider = CountingProvider()
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_lingneng_tool_providers",
+        lambda settings: Providers(provider),
+        raising=False,
+    )
+    cfg = settings(
+        tmp_path,
+        LINGNENG_AGENT_MODE="hermes",
+        LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN="1",
+    )
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+
+    for run_id in ["run-1", "run-2"]:
+        adapter = HermesAgentRunAdapter(settings=cfg, agent_cls=ToolDispatchingAgent)
+        [event async for event in adapter.stream(request, resolved, run_id)]
+
+    assert provider.calls == 2

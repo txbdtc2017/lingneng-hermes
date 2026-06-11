@@ -45,13 +45,18 @@ from lingneng.tools.employee_handoff import (
     build_handoff_request_context,
     employee_handoff_context,
 )
+from lingneng.tools.chart_visualization import chart_visualization_context
+from lingneng.tools.document_generation import document_generation_context
+from lingneng.tools.image_generation import image_generation_context
+from lingneng.tools.limits import tool_run_guard_context
+from lingneng.tools.providers import build_lingneng_tool_providers
 from lingneng.tools.rag import (
     HttpRagProvider,
     build_rag_request_context,
     rag_request_context,
 )
 from lingneng.tools.skill_tools import skill_tool_context
-from lingneng.tools.web_search import lingneng_tool_context
+from lingneng.tools.web_search import web_search_context
 
 
 _KANBAN_ENV_KEYS = (
@@ -360,8 +365,25 @@ class HermesAgentRunAdapter:
                         resolved_session=resolved_session,
                         pending_store=_build_route_pending_store(self.settings),
                     )
+                    providers = build_lingneng_tool_providers(self.settings)
                     with (
-                        lingneng_tool_context(self.settings),
+                        web_search_context(
+                            self.settings,
+                            provider=providers.web_search,
+                        ),
+                        document_generation_context(
+                            self.settings,
+                            provider=providers.document_generation,
+                        ),
+                        image_generation_context(
+                            self.settings,
+                            provider=providers.image_generation,
+                        ),
+                        chart_visualization_context(
+                            self.settings,
+                            provider=providers.chart_visualization,
+                        ),
+                        tool_run_guard_context(self.settings),
                         skill_tool_context(self.settings),
                         employee_handoff_context(handoff_context),
                     ):

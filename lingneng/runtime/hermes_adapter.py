@@ -41,6 +41,7 @@ from lingneng.tools.rag import (
     build_rag_request_context,
     rag_request_context,
 )
+from lingneng.tools.skill_tools import skill_tool_context
 from lingneng.tools.web_search import lingneng_tool_context
 
 
@@ -310,7 +311,10 @@ class HermesAgentRunAdapter:
                             active_session_id
                         )
                     )
-                    with lingneng_tool_context(self.settings):
+                    with (
+                        lingneng_tool_context(self.settings),
+                        skill_tool_context(self.settings),
+                    ):
                         _emit_attachment_started(
                             request=request,
                             on_tool_progress=on_tool_progress,

@@ -1081,3 +1081,84 @@ async def test_hermes_adapter_installs_lingneng_activity_tracker(tmp_path):
     agent = adapter._last_agent_for_tests
     assert agent._last_activity_desc == "probe"
     assert agent._last_activity_ts > 0.0
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_injects_bundled_skill_context_without_env_roots(
+    tmp_path,
+):
+    payload = full_payload()
+    payload["skill"]["skill_id"] = "marketing-copy-generation"
+    payload["skill"]["inline"] = {"summary": "INLINE MUST NOT APPEAR"}
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(tmp_path, LINGNENG_AGENT_MODE="hermes"),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    prompt = RecordingSystemPromptAgent.system_message_seen
+    assert "LingNeng Skill Context" in prompt
+    assert "employee-marketing-content-creator" in prompt
+    assert "marketing-copy-generation" in prompt
+    assert "INLINE MUST NOT APPEAR" not in prompt
+
+
+class DispatchingSkillToolAgent(RecordingSystemPromptAgent):
+    dispatched_result: dict = {}
+
+    def run_conversation(
+        self,
+        user_message,
+        system_message=None,
+        conversation_history=None,
+        task_id=None,
+        stream_callback=None,
+        persist_user_message=None,
+    ):
+        import json
+
+        from tools.registry import registry
+
+        type(self).system_message_seen = system_message or ""
+        type(self).dispatched_result = json.loads(
+            registry.dispatch(
+                "read_skill",
+                {"skill_id": "custom-phase9-skill", "max_chars": 500},
+            )
+        )
+        return {"final_response": "完成", "messages": []}
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_sets_skill_tool_context_for_agent_tool_dispatch(
+    tmp_path,
+):
+    skill_root = tmp_path / "custom-skills"
+    write_skill(
+        skill_root,
+        "custom-phase9-skill",
+        body="## When to Use\nCUSTOM PHASE 9 BODY\n",
+    )
+    DispatchingSkillToolAgent.dispatched_result = {}
+    request = ChatStreamRequest.model_validate(full_payload())
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_SKILL_ROOTS=str(skill_root),
+        ),
+        agent_cls=DispatchingSkillToolAgent,
+    )
+
+    [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    result = DispatchingSkillToolAgent.dispatched_result
+    assert result["success"] is True
+    assert result["tool_name"] == "read_skill"
+    assert result["safe_output"]["skill"]["package_name"] == "custom-phase9-skill"
+    assert "CUSTOM PHASE 9 BODY" in result["safe_output"]["body"]

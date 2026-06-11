@@ -63,7 +63,7 @@ def settings(tmp_path: Path, **overrides) -> LingNengSettings:
     env = {
         "LINGNENG_SKILL_ROOTS": str(tmp_path),
         "LINGNENG_SKILL_EXCERPT_MAX_CHARS": "500",
-        "LINGNENG_SKILL_PROMPT_MAX_CHARS": "1000",
+        "LINGNENG_SKILL_PROMPT_MAX_CHARS": "12000",
     }
     env.update(overrides)
     return LingNengSettings.from_env(env)
@@ -93,6 +93,48 @@ def test_loads_employee_base_skill_by_employee_type(tmp_path):
     assert result.employee_base is not None
     assert result.employee_base.package_name == "employee-marketing-content-creator"
     assert "内容创意师" in result.to_prompt_text()
+
+
+def test_loader_uses_bundled_employee_base_without_configured_roots(tmp_path):
+    loader = LingNengSkillLoader(
+        LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+    )
+
+    result = loader.build_prompt_context(request(""))
+    prompt = result.to_prompt_text()
+
+    assert result.employee_base is not None
+    assert result.employee_base.package_name == "employee-marketing-content-creator"
+    assert "employee-marketing-content-creator" in prompt
+    assert "内容创意师" in prompt
+
+
+def test_prompt_context_includes_recommended_skills_from_metadata(tmp_path):
+    loader = LingNengSkillLoader(
+        LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+    )
+
+    prompt = loader.build_prompt_context(request("")).to_prompt_text()
+
+    assert "Recommended Task Skills" in prompt
+    assert "marketing-copy-generation" in prompt
+    assert "Recommended Capability Skills" in prompt
+    assert "image-generation" in prompt
+
+
+def test_prompt_context_guides_progressive_skill_reading(tmp_path):
+    loader = LingNengSkillLoader(
+        LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+    )
+
+    prompt = loader.build_prompt_context(
+        request("restaurant-campaign-planning")
+    ).to_prompt_text()
+
+    assert "read_skill" in prompt
+    assert "deeper task instructions" in prompt
+    assert "read_skill_resource" in prompt
+    assert "listed references" in prompt
 
 
 def test_selects_explicit_skill_by_exact_package_name(tmp_path):

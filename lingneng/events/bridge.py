@@ -503,6 +503,7 @@ def _has_forbidden_public_text(value: str) -> bool:
     return (
         _CREDENTIAL_VALUE_RE.search(value) is not None
         or _RAW_PAYLOAD_VALUE_RE.search(value) is not None
+        or _has_raw_payload_json_shape(value)
         or _SECRET_TOKEN_FRAGMENT_RE.search(value) is not None
         or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
         or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
@@ -511,3 +512,29 @@ def _has_forbidden_public_text(value: str) -> bool:
         or "traceback" in lowered
         or "user private input" in lowered
     )
+
+
+def _has_raw_payload_json_shape(value: str) -> bool:
+    stripped = value.strip()
+    if not (
+        (stripped.startswith("{") and stripped.endswith("}"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    return _contains_forbidden_payload_key(parsed)
+
+
+def _contains_forbidden_payload_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            _is_public_metadata_key(str(key)) is False
+            or _contains_forbidden_payload_key(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_forbidden_payload_key(item) for item in value)
+    return False

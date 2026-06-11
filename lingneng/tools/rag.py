@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.schemas.chat_events import Citation
 from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.keys import ResolvedSessionKey
 from lingneng.tools.artifacts import stable_percent_decode
@@ -421,8 +422,10 @@ def _sanitize_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]
         for key in _PUBLIC_CITATION_FIELDS:
             if key in item:
                 citation[key] = _sanitize_public_value(item[key])
-        if citation:
-            sanitized.append(citation)
+        try:
+            sanitized.append(Citation.model_validate(citation).model_dump(mode="json"))
+        except ValidationError:
+            continue
     return sanitized
 
 
@@ -466,6 +469,7 @@ def _has_forbidden_public_text(value: str) -> bool:
     return (
         _CREDENTIAL_VALUE_RE.search(value) is not None
         or _RAW_PAYLOAD_VALUE_RE.search(value) is not None
+        or _has_raw_payload_json_shape(value)
         or _SECRET_TOKEN_FRAGMENT_RE.search(value) is not None
         or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
         or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
@@ -474,6 +478,31 @@ def _has_forbidden_public_text(value: str) -> bool:
         or "traceback" in lowered
         or "user private input" in lowered
     )
+
+
+def _has_raw_payload_json_shape(value: str) -> bool:
+    stripped = value.strip()
+    if not (
+        (stripped.startswith("{") and stripped.endswith("}"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    return _contains_forbidden_payload_key(parsed)
+
+
+def _contains_forbidden_payload_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(
+            _is_forbidden_key(key) or _contains_forbidden_payload_key(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_forbidden_payload_key(item) for item in value)
+    return False
 
 
 def _is_forbidden_key(value: object) -> bool:

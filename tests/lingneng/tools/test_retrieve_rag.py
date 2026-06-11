@@ -317,6 +317,34 @@ def test_retrieve_rag_sanitizes_percent_encoded_secret_context_and_metadata(
     assert "x-amz-signature" not in dumped
 
 
+def test_retrieve_rag_sanitizes_json_shaped_raw_dump_metadata_values(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="公共上下文",
+            citations=[],
+            metadata={
+                "notes": [
+                    '{"query":"客户问套餐"}',
+                    '{"input":"客户问套餐"}',
+                    '{"summary":"public retrieval summary"}',
+                ],
+            },
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert result["metadata"]["notes"] == [
+        "",
+        "",
+        '{"summary":"public retrieval summary"}',
+    ]
+    assert "客户问套餐" not in dumped
+
+
 def test_retrieve_rag_sanitizes_citation_private_fields(tmp_path):
     provider = FakeRagProvider(
         RagRetrieveResult(
@@ -348,6 +376,57 @@ def test_retrieve_rag_sanitizes_citation_private_fields(tmp_path):
     assert "raw_payload" not in dumped
     assert "api_key" not in dumped
     assert "/Users/rotas" not in dumped
+
+
+def test_retrieve_rag_drops_invalid_public_citations_and_counts_valid(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(
+            status="hit",
+            context="公共上下文",
+            citations=[
+                {
+                    "document_id": "doc-1",
+                    "source_file_id": "file-1",
+                    "source_file_name": "menu.pdf",
+                    "page_no": 2,
+                    "section_title": "套餐",
+                    "chunk_id": "chunk-1",
+                    "score": 0.9,
+                },
+                {
+                    "document_id": "doc-2",
+                    "source_file_id": "file-2",
+                    "source_file_name": "invalid-score.pdf",
+                    "chunk_id": "chunk-2",
+                    "score": -1,
+                },
+                {
+                    "document_id": "doc-3",
+                    "source_file_id": "file-3",
+                    "source_file_name": "missing-chunk.pdf",
+                    "score": 0.8,
+                },
+            ],
+            metadata={},
+        )
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        result = json.loads(retrieve_rag_handler({"query": "需要资料"}))
+
+    assert result["citations"] == [
+        {
+            "document_id": "doc-1",
+            "source_file_id": "file-1",
+            "source_file_name": "menu.pdf",
+            "page_no": 2,
+            "section_title": "套餐",
+            "chunk_id": "chunk-1",
+            "score": 0.9,
+        }
+    ]
+    assert result["metadata"]["selected_count"] == 1
+    assert result["metadata"]["citation_count"] == 1
 
 
 def test_retrieve_rag_not_configured_is_safe(tmp_path):

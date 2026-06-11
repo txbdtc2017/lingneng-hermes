@@ -13,6 +13,7 @@ from lingneng.tools.skill_tools import (
     search_skills_handler,
     skill_tool_context,
 )
+from tests.lingneng.skills.test_skill_loader import write_skill
 from tools.registry import registry
 
 
@@ -21,6 +22,16 @@ def settings(tmp_path: Path) -> LingNengSettings:
         {
             "LINGNENG_APP_ENV": "test",
             "LINGNENG_RUNTIME_DIR": str(tmp_path / ".runtime-test"),
+        }
+    )
+
+
+def settings_with_skill_root(tmp_path: Path, skill_root: Path) -> LingNengSettings:
+    return LingNengSettings.from_env(
+        {
+            "LINGNENG_APP_ENV": "test",
+            "LINGNENG_RUNTIME_DIR": str(tmp_path / ".runtime-test"),
+            "LINGNENG_SKILL_ROOTS": str(skill_root),
         }
     )
 
@@ -55,7 +66,6 @@ def assert_no_private_output(result: dict[str, Any]) -> None:
     forbidden_fragments = (
         "traceback",
         "api_key",
-        "history",
         "/users/",
         "lingnengai/app/skills",
     )
@@ -116,6 +126,71 @@ def test_read_skill_handler_returns_bounded_body_and_resource_manifest(tmp_path)
         for resource in result["safe_output"]["resource_manifest"]["resources"]
     }
     assert "references/marketing-nodes.md" in resource_paths
+    assert_no_private_output(result)
+
+
+def test_read_skill_handler_preserves_normal_history_business_text(tmp_path):
+    skill_root = tmp_path / "skills"
+    write_skill(
+        skill_root,
+        "member-history-analysis",
+        body="## Workflow\nRun member history analysis before campaign planning.\n",
+    )
+
+    with skill_tool_context(settings_with_skill_root(tmp_path, skill_root)):
+        result = loads_tool_result(
+            read_skill_handler(
+                {
+                    "skill_id": "member-history-analysis",
+                    "max_chars": 600,
+                }
+            )
+        )
+
+    assert_public_result_shape(result, tool_name="read_skill")
+    assert result["success"] is True
+    assert result["safe_output"]["skill"]["package_name"] == "member-history-analysis"
+    assert "member history analysis" in result["safe_output"]["body"]
+    assert_no_private_output(result)
+
+
+def test_read_skill_handler_removes_embedded_local_path_fragments(tmp_path):
+    skill_root = tmp_path / "skills"
+    write_skill(
+        skill_root,
+        "path-safety-skill",
+        body=(
+            "## Workflow\n"
+            "请看 /workspace/private/data.csv 里的数据，并总结门店表现。\n"
+            "Also remove /Users/alice/member.csv /home/app/private.json "
+            "/tmp/cache.csv and C:\\Users\\alice\\member.csv, but keep guidance.\n"
+        ),
+    )
+
+    with skill_tool_context(settings_with_skill_root(tmp_path, skill_root)):
+        result = loads_tool_result(
+            read_skill_handler(
+                {
+                    "skill_id": "path-safety-skill",
+                    "max_chars": 600,
+                }
+            )
+        )
+
+    assert_public_result_shape(result, tool_name="read_skill")
+    assert result["success"] is True
+    serialized = json.dumps(result, ensure_ascii=False)
+    for local_path in (
+        "/workspace/private/data.csv",
+        "/Users/alice/member.csv",
+        "/home/app/private.json",
+        "/tmp/cache.csv",
+        "C:\\Users\\alice\\member.csv",
+    ):
+        assert local_path not in serialized
+    assert "请看" in result["safe_output"]["body"]
+    assert "里的数据" in result["safe_output"]["body"]
+    assert "keep guidance" in result["safe_output"]["body"]
     assert_no_private_output(result)
 
 
@@ -228,6 +303,31 @@ def test_invalid_args_return_invalid_argument(tmp_path):
                 "max_chars": "not-an-int",
             },
         ),
+    )
+
+    with skill_tool_context(settings(tmp_path)):
+        for tool_name, handler, args in cases:
+            result = loads_tool_result(handler(args))
+            assert_public_result_shape(result, tool_name=tool_name)
+            assert result["success"] is False
+            assert result["code"] == "INVALID_ARGUMENT"
+            assert_no_private_output(result)
+
+
+def test_list_and_search_malformed_optional_args_return_invalid_argument(tmp_path):
+    cases = (
+        ("list_skills", list_skills_handler, {"limit": 0}),
+        ("list_skills", list_skills_handler, {"limit": "not-an-int"}),
+        ("list_skills", list_skills_handler, {"employee_type": 123}),
+        ("list_skills", list_skills_handler, {"kind": 123}),
+        ("search_skills", search_skills_handler, {"query": "营销", "limit": 0}),
+        (
+            "search_skills",
+            search_skills_handler,
+            {"query": "营销", "limit": "not-an-int"},
+        ),
+        ("search_skills", search_skills_handler, {"query": "营销", "employee_type": 123}),
+        ("search_skills", search_skills_handler, {"query": "营销", "kind": 123}),
     )
 
     with skill_tool_context(settings(tmp_path)):

@@ -21,9 +21,15 @@ _CURRENT_SETTINGS: ContextVar[LingNengSettings | None] = ContextVar(
 )
 _PACKAGE_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
-_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
-_LOCAL_ROOT_FRAGMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9._-])[\\/]+(?:Users|home|private|tmp|var|etc|opt|root)\b"
+_LOCAL_URI_RE = re.compile(r"\b(?:file|local)://[^\s\"'<>),;，。]+", re.IGNORECASE)
+_LOCAL_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9._~-])"
+    r"(?:"
+    r"/(?:Users|home|private|tmp|var|etc|opt|root|workspace)\b"
+    r"[^\s\"'<>),;，。]*"
+    r"|~[\\/][^\s\"'<>),;，。]*"
+    r"|[A-Za-z]:[\\/][^\s\"'<>),;，。]*"
+    r")"
 )
 _FORBIDDEN_KEY_PARTS = (
     "api_key",
@@ -46,7 +52,6 @@ _FORBIDDEN_TEXT_PARTS = (
     "authorization",
     "bearer ",
     "credential",
-    "history",
     "password",
     "passwd",
     "secret",
@@ -85,11 +90,17 @@ def list_skills_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> st
     if error is not None:
         return _failure("list_skills", error)
 
-    employee_type = _optional_text_arg(raw_args.get("employee_type"))
+    employee_type, employee_type_error = _optional_text_arg(
+        raw_args.get("employee_type")
+    )
+    if employee_type_error is not None:
+        return _failure("list_skills", employee_type_error)
     kind, kind_error = _optional_kind(raw_args.get("kind"))
     if kind_error is not None:
         return _failure("list_skills", kind_error)
-    limit = _optional_int_arg(raw_args.get("limit"))
+    limit, limit_error = _optional_int_arg(raw_args.get("limit"))
+    if limit_error is not None:
+        return _failure("list_skills", limit_error)
 
     try:
         catalog = LingNengSkillCatalog(settings)
@@ -133,11 +144,17 @@ def search_skills_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> 
     query = _required_text_arg(raw_args.get("query"))
     if query is None:
         return _failure("search_skills", "INVALID_ARGUMENT")
-    employee_type = _optional_text_arg(raw_args.get("employee_type"))
+    employee_type, employee_type_error = _optional_text_arg(
+        raw_args.get("employee_type")
+    )
+    if employee_type_error is not None:
+        return _failure("search_skills", employee_type_error)
     kind, kind_error = _optional_kind(raw_args.get("kind"))
     if kind_error is not None:
         return _failure("search_skills", kind_error)
-    limit = _optional_int_arg(raw_args.get("limit"))
+    limit, limit_error = _optional_int_arg(raw_args.get("limit"))
+    if limit_error is not None:
+        return _failure("search_skills", limit_error)
 
     try:
         catalog = LingNengSkillCatalog(settings)
@@ -296,15 +313,17 @@ def _required_text_arg(value: Any) -> str | None:
     return stripped
 
 
-def _optional_text_arg(value: Any) -> str | None:
+def _optional_text_arg(value: Any) -> tuple[str | None, str | None]:
     if value is None:
-        return None
+        return None, None
     if not isinstance(value, str):
-        return None
+        return None, "INVALID_ARGUMENT"
     stripped = value.strip()
-    if not stripped or _CONTROL_CHAR_RE.search(stripped):
-        return None
-    return stripped
+    if not stripped:
+        return None, None
+    if _CONTROL_CHAR_RE.search(stripped):
+        return None, "INVALID_ARGUMENT"
+    return stripped, None
 
 
 def _required_skill_id(value: Any) -> str | None:
@@ -315,22 +334,26 @@ def _required_skill_id(value: Any) -> str | None:
 
 
 def _optional_kind(value: Any) -> tuple[str | None, str | None]:
-    kind = _optional_text_arg(value)
-    if kind is None:
-        return None, None
+    kind, error = _optional_text_arg(value)
+    if error is not None or kind is None:
+        return None, error
     if kind not in {"employee_base", "task", "capability", "infrastructure"}:
         return None, "INVALID_ARGUMENT"
     return kind, None
 
 
-def _optional_int_arg(value: Any) -> int | None:
+def _optional_int_arg(value: Any) -> tuple[int | None, str | None]:
     if value is None:
-        return None
+        return None, None
+    if isinstance(value, bool):
+        return None, "INVALID_ARGUMENT"
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
+        return None, "INVALID_ARGUMENT"
+    if parsed <= 0:
+        return None, "INVALID_ARGUMENT"
+    return parsed, None
 
 
 def _optional_positive_int_arg(value: Any) -> tuple[int | None, str | None]:
@@ -459,14 +482,11 @@ def _sanitize_public_value(value: Any, *, depth: int = 0) -> Any:
 
 def _public_text(value: str, *, max_chars: int) -> str:
     clean_text = _CONTROL_CHAR_RE.sub("", value).strip()
-    lowered = clean_text.lower()
-    if (
-        any(part in lowered for part in _FORBIDDEN_TEXT_PARTS)
-        or _looks_like_local_path(clean_text)
-        or _contains_embedded_local_path(clean_text)
-    ):
+    public_text = _replace_local_path_fragments(clean_text)
+    lowered = public_text.lower()
+    if any(part in lowered for part in _FORBIDDEN_TEXT_PARTS):
         return ""
-    return clean_text[:max_chars]
+    return public_text[:max_chars]
 
 
 def _is_forbidden_key(value: object) -> bool:
@@ -474,20 +494,9 @@ def _is_forbidden_key(value: object) -> bool:
     return any(part in lowered for part in _FORBIDDEN_KEY_PARTS)
 
 
-def _looks_like_local_path(value: str) -> bool:
-    lowered = value.lower()
-    return (
-        lowered.startswith(("file://", "local://"))
-        or value.startswith(("/", "\\", "~"))
-        or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
-    )
-
-
-def _contains_embedded_local_path(value: str) -> bool:
-    lowered = value.lower()
-    return (
-        "file://" in lowered
-        or "local://" in lowered
-        or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
-        or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
+def _replace_local_path_fragments(value: str) -> str:
+    without_local_uris = _LOCAL_URI_RE.sub("[local_path_removed]", value)
+    return _LOCAL_ABSOLUTE_PATH_RE.sub(
+        "[local_path_removed]",
+        without_local_uris,
     )

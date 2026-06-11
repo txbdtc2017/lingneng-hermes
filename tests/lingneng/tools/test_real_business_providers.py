@@ -92,6 +92,68 @@ def test_bocha_provider_sends_expected_request_and_normalizes_sources(tmp_path):
     ]
 
 
+def test_bocha_provider_accepts_official_top_level_web_pages_shape(tmp_path):
+    official_payload = {
+        "_type": "SearchResponse",
+        "queryContext": {"originalQuery": "灵能 AI"},
+        "webPages": {
+            "totalEstimatedMatches": 1,
+            "value": [
+                {
+                    "id": "official-1",
+                    "name": "灵能 AI 官方搜索结果",
+                    "url": "https://example.com/official",
+                    "siteName": "Example",
+                    "siteIcon": "https://example.com/icon.png",
+                    "snippet": "网页片段",
+                    "summary": "可用摘要",
+                    "datePublished": "2026-06-11",
+                }
+            ],
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=official_payload)
+
+    provider = BochaWebSearchProvider(
+        settings(
+            tmp_path,
+            LINGNENG_WEB_SEARCH_PROVIDER="bocha",
+            LINGNENG_BOCHA_WEB_SEARCH_API_KEY="key",
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.search(provider.request_model(query="灵能 AI", top_k=1))
+
+    assert result.sources == [
+        {
+            "id": "official-1",
+            "title": "灵能 AI 官方搜索结果",
+            "url": "https://example.com/official",
+            "website": "Example",
+            "date": "2026-06-11",
+            "snippet": "网页片段；可用摘要",
+        }
+    ]
+    assert "可用摘要" in result.sources[0]["snippet"]
+
+    from lingneng.tools.web_search import web_search_context, web_search_handler
+
+    with web_search_context(settings(tmp_path), provider=provider):
+        public_result = json.loads(web_search_handler({"query": "灵能 AI", "top_k": 1}))
+
+    dumped = json.dumps(public_result, ensure_ascii=False)
+    assert public_result["success"] is True
+    assert public_result["safe_output"]["sources"][0] == result.sources[0]
+    assert "_type" not in dumped
+    assert "queryContext" not in dumped
+    assert "totalEstimatedMatches" not in dumped
+    assert "siteIcon" not in dumped
+
+
 def test_bocha_provider_maps_recency_filters(tmp_path):
     bodies: list[dict[str, object]] = []
 

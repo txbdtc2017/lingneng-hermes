@@ -92,7 +92,9 @@ def _sources_from_payload(payload: object) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
 
-    candidates = _nested(payload, ["data", "webPages", "value"])
+    candidates = _nested(payload, ["webPages", "value"])
+    if not isinstance(candidates, list):
+        candidates = _nested(payload, ["data", "webPages", "value"])
     if not isinstance(candidates, list):
         candidates = _nested(payload, ["data", "web_pages", "value"])
     if not isinstance(candidates, list):
@@ -111,10 +113,24 @@ def _sources_from_payload(payload: object) -> list[dict[str, Any]]:
                 "url": item.get("url") or "",
                 "website": item.get("website") or item.get("siteName") or "",
                 "date": item.get("date") or item.get("datePublished"),
-                "snippet": item.get("snippet") or item.get("summary") or "",
+                "snippet": _snippet_from_item(item),
             }
         )
     return sources
+
+
+def _snippet_from_item(item: dict[str, Any]) -> str:
+    snippet = _text_value(item.get("snippet"))
+    summary = _text_value(item.get("summary"))
+    if snippet and summary and summary not in snippet:
+        return f"{snippet}；{summary}"
+    return snippet or summary
+
+
+def _text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _nested(payload: dict[str, Any], path: list[str]) -> Any:

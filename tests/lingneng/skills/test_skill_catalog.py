@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from lingneng.config.settings import LingNengSettings
 from lingneng.skills.catalog import LingNengSkillCatalog, bundled_lingneng_skill_root
 from tests.lingneng.skills.test_skill_loader import write_skill
@@ -192,6 +194,145 @@ def test_catalog_resource_read_rejects_path_traversal(tmp_path):
     result = catalog.read_skill_resource(
         "restaurant-campaign-planning",
         "../SKILL.md",
+    )
+
+    assert result.success is False
+    assert result.code == "RESOURCE_NOT_ALLOWED"
+
+
+def test_catalog_resource_read_returns_manifest_listed_resource(tmp_path):
+    write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={"references/playbook.md": "资源正文\n第二行"},
+    )
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        "references/playbook.md",
+    )
+
+    assert result.success is True
+    assert result.resource_id == "references/playbook.md"
+    assert result.content == "资源正文\n第二行"
+    assert result.size_bytes > 0
+    assert result.mime_type == "text/markdown"
+
+
+def test_catalog_resource_read_rejects_absolute_path(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside", encoding="utf-8")
+    write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={"references/playbook.md": "allowed"},
+    )
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        str(outside),
+    )
+
+    assert result.success is False
+    assert result.code == "RESOURCE_NOT_ALLOWED"
+
+
+def test_catalog_resource_manifest_and_read_reject_hidden_path_components(tmp_path):
+    write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={
+            "references/playbook.md": "allowed",
+            "references/.hidden.md": "hidden",
+        },
+    )
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+
+    package = catalog.get_package("resource-safety-skill")
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        "references/.hidden.md",
+    )
+
+    assert package is not None
+    assert "references/.hidden.md" not in {
+        resource.path for resource in package.resource_manifest.resources
+    }
+    assert result.success is False
+    assert result.code == "RESOURCE_NOT_ALLOWED"
+
+
+def test_catalog_resource_read_rejects_control_character_resource_id(tmp_path):
+    write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={"references/playbook.md": "allowed"},
+    )
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        "references/playbook.md\nINJECT",
+    )
+
+    assert result.success is False
+    assert result.code == "RESOURCE_NOT_ALLOWED"
+
+
+def test_catalog_resource_read_rejects_manifest_external_file(tmp_path):
+    package_dir = write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={"references/playbook.md": "allowed"},
+    )
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+    assert catalog.get_package("resource-safety-skill") is not None
+    (package_dir / "references" / "unlisted.md").write_text(
+        "not in manifest",
+        encoding="utf-8",
+    )
+
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        "references/unlisted.md",
+    )
+
+    assert result.success is False
+    assert result.code == "RESOURCE_NOT_ALLOWED"
+
+
+def test_catalog_resource_read_rejects_symlink_escape(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside", encoding="utf-8")
+    package_dir = write_skill(
+        tmp_path,
+        "resource-safety-skill",
+        resources={"references/playbook.md": "allowed"},
+    )
+    symlink_path = package_dir / "references" / "escape.md"
+    try:
+        symlink_path.symlink_to(outside)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlink creation is not supported: {exc}")
+    catalog = LingNengSkillCatalog(
+        _settings(tmp_path, LINGNENG_SKILL_ROOTS=str(tmp_path))
+    )
+
+    result = catalog.read_skill_resource(
+        "resource-safety-skill",
+        "references/escape.md",
     )
 
     assert result.success is False

@@ -6,8 +6,11 @@ from lingneng.config.settings import LingNengSettings
 from lingneng.tools.attachment_provider import (
     build_attachment_processing_provider,
 )
-from lingneng.tools.attachments import AttachmentProcessingRequest
 from lingneng.schemas.chat_request import AttachmentPayload
+from lingneng.tools.attachments import (
+    AttachmentProcessingRequest,
+    AttachmentProcessingResult,
+)
 
 
 def settings(tmp_path: Path, **overrides: str) -> LingNengSettings:
@@ -75,7 +78,9 @@ def test_local_text_provider_skeleton_process_fail_closes(tmp_path):
     assert provider is not None
     assert callable(provider.process)
 
-    result = provider.process(attachment_request())
+    result = AttachmentProcessingResult.model_validate(
+        provider.process(attachment_request())
+    )
 
     assert result.status == "skipped"
     assert result.context_text == ""
@@ -100,7 +105,9 @@ def test_http_provider_skeleton_process_fail_closes_without_secret_leak(tmp_path
     assert provider.__class__.__name__ == "HttpAttachmentProcessingProvider"
     assert callable(provider.process)
 
-    result = provider.process(attachment_request())
+    result = AttachmentProcessingResult.model_validate(
+        provider.process(attachment_request())
+    )
     dumped = result.model_dump_json()
 
     assert result.status == "skipped"

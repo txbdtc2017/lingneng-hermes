@@ -32,17 +32,19 @@ class ToolRunGuard:
     signatures: set[tuple[str, str]] = field(default_factory=set)
 
     def check(self, tool_name: str, args: dict[str, Any]) -> str | None:
-        signature = _signature(tool_name, args)
+        signature = _signature(tool_name, args, self.settings)
+        key = (tool_name, signature)
         if self.settings.duplicate_artifact_guard_enabled:
-            key = (tool_name, signature)
             if key in self.signatures:
                 return _DUPLICATE_CODE
-            self.signatures.add(key)
 
         limit = _limit_for(tool_name, self.settings)
         next_count = self.counts.get(tool_name, 0) + 1
         if next_count > limit:
             return _LIMIT_CODE
+
+        if self.settings.duplicate_artifact_guard_enabled:
+            self.signatures.add(key)
         self.counts[tool_name] = next_count
         return None
 
@@ -108,43 +110,55 @@ def _message(tool_name: str, code: str) -> str:
     return f"LingNeng {tool_name} call was skipped for this run."
 
 
-def _signature(tool_name: str, args: dict[str, Any]) -> str:
+def _signature(
+    tool_name: str,
+    args: dict[str, Any],
+    settings: LingNengSettings,
+) -> str:
     if tool_name == "document_generation":
-        payload = _document_signature_payload(args)
+        payload = _document_signature_payload(args, settings)
     elif tool_name == "image_generation":
-        payload = _image_signature_payload(args)
+        payload = _image_signature_payload(args, settings)
     elif tool_name == "chart_visualization":
         payload = _chart_signature_payload(args)
     elif tool_name == "web_search":
-        payload = _web_search_signature_payload(args)
+        payload = _web_search_signature_payload(args, settings)
     else:
         payload = _stable_json_hash(args)
     return _stable_json_hash(payload)
 
 
-def _document_signature_payload(args: dict[str, Any]) -> dict[str, Any]:
-    content = _first_non_empty_arg(
-        args.get("content"),
-        args.get("document_content"),
-        args.get("markdown"),
-        args.get("content_brief"),
-    )
+def _document_signature_payload(
+    args: dict[str, Any],
+    settings: LingNengSettings,
+) -> dict[str, Any]:
+    from lingneng.tools.document_generation import _build_document_request
+
+    request = _build_document_request(args, settings)
     return {
-        "title": _text(args.get("title")),
-        "instruction": _text(args.get("instruction")),
-        "format": _text(args.get("format")),
-        "target_format": _text(args.get("target_format")),
-        "content_sha256": _sha256_text(content),
+        "title": request.title,
+        "instruction": request.instruction,
+        "format": request.format,
+        "target_format": request.target_format,
+        "content_sha256": _sha256_text(request.content),
     }
 
 
-def _image_signature_payload(args: dict[str, Any]) -> dict[str, Any]:
+def _image_signature_payload(
+    args: dict[str, Any],
+    settings: LingNengSettings,
+) -> dict[str, Any]:
+    from lingneng.tools.document_generation import _bounded_text, _text_arg
+    from lingneng.tools.image_generation import _normalize_count
+
     return {
-        "prompt_sha256": _sha256_text(_text(args.get("prompt"))),
-        "count": _stable_scalar(args.get("count")),
-        "size": _text(args.get("size")),
-        "quality": _text(args.get("quality")),
-        "style": _text(args.get("style")),
+        "prompt_sha256": _sha256_text(
+            _bounded_text(_text_arg(args.get("prompt")), max_chars=4000)
+        ),
+        "count": _normalize_count(args.get("count"), settings),
+        "size": _bounded_text(_text_arg(args.get("size")), max_chars=40),
+        "quality": _bounded_text(_text_arg(args.get("quality")), max_chars=40),
+        "style": _bounded_text(_text_arg(args.get("style")), max_chars=100),
     }
 
 
@@ -158,21 +172,19 @@ def _chart_signature_payload(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _web_search_signature_payload(args: dict[str, Any]) -> dict[str, Any]:
+def _web_search_signature_payload(
+    args: dict[str, Any],
+    settings: LingNengSettings,
+) -> dict[str, Any]:
+    from lingneng.tools.web_search import _build_search_request
+
+    request = _build_search_request(args, settings)
     return {
-        "query_sha256": _sha256_text(_text(args.get("query"))),
-        "top_k": _stable_scalar(args.get("top_k")),
-        "recency_filter": _text(args.get("recency_filter")),
-        "site_filter": _text(args.get("site_filter")),
+        "query_sha256": _sha256_text(request.query),
+        "top_k": request.top_k,
+        "recency_filter": request.recency_filter,
+        "site_filter": request.site_filter,
     }
-
-
-def _first_non_empty_arg(*values: Any) -> str:
-    for value in values:
-        text = _text(value)
-        if text:
-            return text
-    return ""
 
 
 def _text(value: Any) -> str:

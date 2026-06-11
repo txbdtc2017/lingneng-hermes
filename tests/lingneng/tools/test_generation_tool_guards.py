@@ -10,8 +10,18 @@ from lingneng.tools.document_generation import (
     document_generation_context,
     document_generation_handler,
 )
+from lingneng.tools.image_generation import (
+    ImageGenerationResult,
+    image_generation_context,
+    image_generation_handler,
+)
 from lingneng.tools.limits import tool_run_guard_context
-from tests.lingneng.tools.test_generation_tools import DOC_ARTIFACT
+from lingneng.tools.web_search import (
+    WebSearchResult,
+    web_search_context,
+    web_search_handler,
+)
+from tests.lingneng.tools.test_generation_tools import DOC_ARTIFACT, IMAGE_ARTIFACT
 
 
 def settings(tmp_path: Path, **overrides: str) -> LingNengSettings:
@@ -34,6 +44,29 @@ class CountingDocumentProvider:
         return DocumentGenerationResult(summary="ok", artifacts=[DOC_ARTIFACT])
 
 
+class CountingImageProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, request: Any) -> ImageGenerationResult:
+        del request
+        self.calls += 1
+        return ImageGenerationResult(summary="ok", artifacts=[IMAGE_ARTIFACT])
+
+
+class CountingWebSearchProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search(self, request: Any) -> WebSearchResult:
+        del request
+        self.calls += 1
+        return WebSearchResult(
+            summary="ok",
+            sources=[{"id": "s1", "title": "A", "url": "https://example.com/a"}],
+        )
+
+
 def test_duplicate_document_generation_is_suppressed_within_run(tmp_path: Path) -> None:
     cfg = settings(tmp_path)
     provider = CountingDocumentProvider()
@@ -53,6 +86,51 @@ def test_duplicate_document_generation_is_suppressed_within_run(tmp_path: Path) 
     assert provider.calls == 1
 
 
+def test_document_signature_uses_handler_content_alias_order(tmp_path: Path) -> None:
+    cfg = settings(tmp_path, LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN="3")
+    provider = CountingDocumentProvider()
+
+    with tool_run_guard_context(cfg), document_generation_context(cfg, provider=provider):
+        first = json.loads(
+            document_generation_handler(
+                {"title": "报告", "content": "正文", "document_content": "版本 A"}
+            )
+        )
+        second = json.loads(
+            document_generation_handler(
+                {"title": "报告", "content": "正文", "document_content": "版本 B"}
+            )
+        )
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert provider.calls == 2
+
+
+def test_document_signature_normalizes_default_pdf_format(tmp_path: Path) -> None:
+    cfg = settings(tmp_path, LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN="3")
+    provider = CountingDocumentProvider()
+
+    with tool_run_guard_context(cfg), document_generation_context(cfg, provider=provider):
+        first = json.loads(
+            document_generation_handler({"title": "报告", "content": "正文"})
+        )
+        second = json.loads(
+            document_generation_handler(
+                {
+                    "title": "报告",
+                    "content": "正文",
+                    "format": "pdf",
+                    "target_format": "pdf",
+                }
+            )
+        )
+
+    assert first["success"] is True
+    assert second["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert provider.calls == 1
+
+
 def test_call_limit_is_enforced_when_duplicate_guard_disabled(tmp_path: Path) -> None:
     cfg = settings(tmp_path, LINGNENG_DUPLICATE_ARTIFACT_GUARD_ENABLED="false")
     provider = CountingDocumentProvider()
@@ -68,6 +146,27 @@ def test_call_limit_is_enforced_when_duplicate_guard_disabled(tmp_path: Path) ->
     assert first["success"] is True
     assert second["code"] == "TOOL_CALL_LIMIT_EXCEEDED"
     assert second["metadata"]["limit"] == 1
+    assert provider.calls == 1
+
+
+def test_limit_exceeded_does_not_record_duplicate_signature(tmp_path: Path) -> None:
+    cfg = settings(tmp_path)
+    provider = CountingDocumentProvider()
+
+    with tool_run_guard_context(cfg), document_generation_context(cfg, provider=provider):
+        first = json.loads(
+            document_generation_handler({"title": "A", "content": "正文 A"})
+        )
+        second = json.loads(
+            document_generation_handler({"title": "B", "content": "正文 B"})
+        )
+        third = json.loads(
+            document_generation_handler({"title": "B", "content": "正文 B"})
+        )
+
+    assert first["success"] is True
+    assert second["code"] == "TOOL_CALL_LIMIT_EXCEEDED"
+    assert third["code"] == "TOOL_CALL_LIMIT_EXCEEDED"
     assert provider.calls == 1
 
 
@@ -100,30 +199,12 @@ def test_missing_provider_is_not_rewritten_by_guard(tmp_path: Path) -> None:
 
 
 def test_web_search_limit_uses_web_search_limit(tmp_path: Path) -> None:
-    from lingneng.tools.web_search import (
-        WebSearchResult,
-        web_search_context,
-        web_search_handler,
-    )
-
-    class Provider:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def search(self, request: Any) -> WebSearchResult:
-            del request
-            self.calls += 1
-            return WebSearchResult(
-                summary="ok",
-                sources=[{"id": "s1", "title": "A", "url": "https://example.com/a"}],
-            )
-
     cfg = settings(
         tmp_path,
         LINGNENG_DUPLICATE_ARTIFACT_GUARD_ENABLED="false",
         LINGNENG_WEB_SEARCH_MAX_CALLS_PER_RUN="1",
     )
-    provider = Provider()
+    provider = CountingWebSearchProvider()
 
     with tool_run_guard_context(cfg), web_search_context(cfg, provider=provider):
         first = json.loads(web_search_handler({"query": "A"}))
@@ -132,3 +213,48 @@ def test_web_search_limit_uses_web_search_limit(tmp_path: Path) -> None:
     assert first["success"] is True
     assert second["code"] == "TOOL_CALL_LIMIT_EXCEEDED"
     assert provider.calls == 1
+
+
+def test_image_signature_normalizes_default_and_clamped_count(tmp_path: Path) -> None:
+    cfg = settings(
+        tmp_path,
+        LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN="3",
+        LINGNENG_IMAGE_MAX_COUNT="2",
+    )
+    provider = CountingImageProvider()
+
+    with tool_run_guard_context(cfg), image_generation_context(cfg, provider=provider):
+        first = json.loads(image_generation_handler({"prompt": "生成配图"}))
+        second = json.loads(image_generation_handler({"prompt": "生成配图", "count": 1}))
+        third = json.loads(image_generation_handler({"prompt": "生成配图", "count": 99}))
+        fourth = json.loads(image_generation_handler({"prompt": "生成配图", "count": 2}))
+
+    assert first["success"] is True
+    assert second["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert third["success"] is True
+    assert fourth["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert provider.calls == 2
+
+
+def test_web_search_signature_normalizes_default_and_clamped_top_k(
+    tmp_path: Path,
+) -> None:
+    cfg = settings(
+        tmp_path,
+        LINGNENG_WEB_SEARCH_MAX_CALLS_PER_RUN="4",
+        LINGNENG_WEB_SEARCH_DEFAULT_TOP_K="3",
+        LINGNENG_WEB_SEARCH_MAX_TOP_K="3",
+    )
+    provider = CountingWebSearchProvider()
+
+    with tool_run_guard_context(cfg), web_search_context(cfg, provider=provider):
+        first = json.loads(web_search_handler({"query": "A"}))
+        second = json.loads(web_search_handler({"query": "A", "top_k": 3}))
+        third = json.loads(web_search_handler({"query": "B", "top_k": 99}))
+        fourth = json.loads(web_search_handler({"query": "B", "top_k": 3}))
+
+    assert first["success"] is True
+    assert second["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert third["success"] is True
+    assert fourth["code"] == "DUPLICATE_TOOL_CALL_SUPPRESSED"
+    assert provider.calls == 2

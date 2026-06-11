@@ -136,6 +136,29 @@ def test_read_skill_resource_handler_rejects_path_traversal(tmp_path):
     assert_no_private_output(result)
 
 
+def test_read_skill_resource_handler_reads_manifest_listed_resource(tmp_path):
+    with skill_tool_context(settings(tmp_path)):
+        result = loads_tool_result(
+            read_skill_resource_handler(
+                {
+                    "skill_id": "restaurant-campaign-planning",
+                    "resource_id": "references/marketing-nodes.md",
+                    "max_chars": 500,
+                }
+            )
+        )
+
+    assert_public_result_shape(result, tool_name="read_skill_resource")
+    assert result["success"] is True
+    assert result["tool_name"] == "read_skill_resource"
+    assert result["safe_output"]["resource_id"] == "references/marketing-nodes.md"
+    assert result["safe_output"]["content"]
+    assert len(result["safe_output"]["content"]) <= 520
+    assert "content_truncated" in result["safe_output"]
+    assert result.get("phase") != "phase_3_stub"
+    assert_no_private_output(result)
+
+
 def test_registry_dispatch_read_skill_uses_real_handler_in_context(tmp_path):
     with skill_tool_context(settings(tmp_path)):
         result = loads_tool_result(

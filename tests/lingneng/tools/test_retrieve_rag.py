@@ -528,6 +528,46 @@ def test_http_rag_provider_rejects_old_lingneng_invalid_citations(tmp_path):
     assert result.code == "RAG_PROVIDER_INVALID_RESULT"
 
 
+def test_http_rag_provider_rejects_old_lingneng_invalid_context(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "context": {"text": "not-a-string"},
+                "citations": [],
+                "route_debug": {"retrieval_status": "hit"},
+            },
+        )
+
+    provider = HttpRagProvider(
+        LingNengSettings.from_env(
+            {
+                "LINGNENG_RUNTIME_DIR": str(tmp_path),
+                "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve",
+            }
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.retrieve(
+        RagRetrieveRequest(
+            query="会员套餐",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            employee_type="marketing_content_creator",
+            conversation_id="conv-a",
+            session_key="session",
+            request_id="req-001",
+            top_k=3,
+            filters={},
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.code == "RAG_PROVIDER_INVALID_RESULT"
+
+
 def test_http_rag_provider_rejects_oversized_stream_without_buffering(tmp_path):
     class FakeStreamResponse:
         status_code = 200
@@ -577,16 +617,20 @@ def test_http_rag_provider_rejects_oversized_stream_without_buffering(tmp_path):
 
 
 def test_http_rag_provider_rejects_non_2xx_without_reading_body(tmp_path):
+    body_read = {"content": False, "iter_bytes": False}
+
     class FakeStreamResponse:
         status_code = 503
 
         @property
         def content(self) -> bytes:
-            raise AssertionError("non-2xx body must not be buffered")
+            body_read["content"] = True
+            return b"must not be buffered"
 
         def iter_bytes(self, *, chunk_size: int | None = None):
             del chunk_size
-            raise AssertionError("non-2xx body must not be read")
+            body_read["iter_bytes"] = True
+            yield b"must not be streamed"
 
     class FakeClient:
         def stream(self, *args: Any, **kwargs: Any) -> FakeStreamContext:
@@ -621,6 +665,7 @@ def test_http_rag_provider_rejects_non_2xx_without_reading_body(tmp_path):
     dumped = result.model_dump_json()
     assert result.status == "failed"
     assert result.code == "RAG_PROVIDER_ERROR"
+    assert body_read == {"content": False, "iter_bytes": False}
     assert "secret-rag-key" not in dumped
     assert "rag.example.test" not in dumped
 

@@ -210,7 +210,9 @@ def _coerce_rag_provider_payload(payload: Any) -> RagRetrieveResult:
     if isinstance(payload, dict) and (
         "context" in payload or "citations" in payload or "route_debug" in payload
     ):
-        context = payload.get("context") if isinstance(payload.get("context"), str) else ""
+        if "context" in payload and not isinstance(payload.get("context"), str):
+            raise ValueError("invalid RAG provider response")
+        context = payload.get("context", "")
         if "citations" in payload and not isinstance(payload.get("citations"), list):
             raise ValueError("invalid RAG provider response")
         citations = payload.get("citations", [])

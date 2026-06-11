@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.tools.attachment_http_provider import (
+    HttpAttachmentProcessingProvider,
+)
 from lingneng.tools.attachment_provider import (
     build_attachment_processing_provider,
 )
@@ -31,10 +38,10 @@ def attachment_request() -> AttachmentProcessingRequest:
             AttachmentPayload.model_validate(
                 {
                     "file_id": "file-1",
-                    "file_name": "menu.txt",
-                    "mime_type": "text/plain",
+                    "file_name": "menu.pdf",
+                    "mime_type": "application/pdf",
                     "size": 100,
-                    "download_url": "https://files.example.test/menu.txt",
+                    "download_url": "https://files.example.test/menu.pdf",
                     "usage": "session_context",
                 }
             )
@@ -91,7 +98,7 @@ def test_local_text_provider_skeleton_process_fail_closes(tmp_path):
     assert result.warnings[0].code == "ATTACHMENT_PROVIDER_NOT_CONFIGURED"
 
 
-def test_http_provider_skeleton_process_fail_closes_without_secret_leak(tmp_path):
+def test_http_provider_factory_builds_configured_provider(tmp_path):
     provider = build_attachment_processing_provider(
         settings(
             tmp_path,
@@ -104,21 +111,6 @@ def test_http_provider_skeleton_process_fail_closes_without_secret_leak(tmp_path
     assert provider is not None
     assert provider.__class__.__name__ == "HttpAttachmentProcessingProvider"
     assert callable(provider.process)
-
-    result = AttachmentProcessingResult.model_validate(
-        provider.process(attachment_request())
-    )
-    dumped = result.model_dump_json()
-
-    assert result.status == "skipped"
-    assert result.context_text == ""
-    assert result.processed_count == 0
-    assert result.failed_count == 1
-    assert result.selected_count == 0
-    assert result.code == "ATTACHMENT_PROVIDER_NOT_CONFIGURED"
-    assert result.warnings[0].code == "ATTACHMENT_PROVIDER_NOT_CONFIGURED"
-    assert "attachment-secret" not in dumped
-    assert "attachments.example" not in dumped
 
 
 def test_attachment_provider_factory_fail_closes_construction_errors(
@@ -148,3 +140,118 @@ def test_attachment_provider_factory_fail_closes_construction_errors(
     assert "attachment local_text provider construction failed" in caplog.text
     assert "secret-token" not in caplog.text
     assert "https://secret.example" not in caplog.text
+
+
+def test_http_attachment_provider_sends_bounded_request_and_normalizes_response(
+    tmp_path,
+):
+    del tmp_path
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers["Authorization"]
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "status": "succeeded",
+                "context_text": "### menu.pdf\n菜品摘要",
+                "processed_count": 1,
+                "failed_count": 0,
+                "selected_count": 1,
+                "warnings": [
+                    {
+                        "code": "ATTACHMENT_CONTEXT_TRUNCATED",
+                        "file_id": "file-1",
+                    }
+                ],
+                "files": [
+                    {
+                        "file_id": "file-1",
+                        "file_name": "menu.pdf",
+                        "status": "processed",
+                    }
+                ],
+            },
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert captured["url"] == "https://attachments.example/process"
+    assert captured["authorization"] == "Bearer secret-key"
+    body = captured["body"]
+    assert body["request_id"] == "req-1"
+    assert body["limits"]["max_file_bytes"] == 800
+    assert (
+        body["attachments"][0]["download_url"]
+        == "https://files.example.test/menu.pdf"
+    )
+    assert "query" not in body
+    assert result.status == "succeeded"
+    assert result.context_text == "### menu.pdf\n菜品摘要"
+    assert result.processed_count == 1
+    assert result.warnings[0].code == "ATTACHMENT_CONTEXT_TRUNCATED"
+
+
+def test_http_attachment_provider_rejects_oversized_response(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            content=b'{"status":"succeeded","context_text":"'
+            + b"x" * 200
+            + b'"}',
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=100,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
+    assert result.context_text == ""
+
+
+def test_http_attachment_provider_sanitizes_failures(tmp_path):
+    del tmp_path
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            500,
+            text="secret-token traceback /Users/rotas/private",
+        )
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process?token=secret-token",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    dumped = result.model_dump_json()
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_ERROR"
+    assert "secret-token" not in dumped
+    assert "traceback" not in dumped
+    assert "/Users/rotas" not in dumped

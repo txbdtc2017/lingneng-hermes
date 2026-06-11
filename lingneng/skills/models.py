@@ -55,6 +55,13 @@ class LingNengSkillMetadata(BaseModel):
     script_policy: str
     employee_type: str | None = None
     display_name: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    recommended_task_skills: list[str] = Field(default_factory=list)
+    recommended_capabilities: list[str] = Field(default_factory=list)
+    target_employee_types: list[str] = Field(default_factory=list)
+    supporting_skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
 
 
 class SkillPackageMetadata(BaseModel):
@@ -97,6 +104,39 @@ class SkillResourceManifest(BaseModel):
         return lines
 
 
+class SkillCatalogItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_name: str
+    description: str
+    kind: SkillKind
+    version: str
+    display_name: str | None = None
+    employee_type: str | None = None
+    target_employee_types: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    recommended_task_skills: list[str] = Field(default_factory=list)
+    recommended_capabilities: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    score: float | None = None
+    matched_terms: list[str] = Field(default_factory=list)
+
+
+class SkillResourceReadResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    skill_id: str
+    resource_id: str
+    content: str = ""
+    content_truncated: bool = False
+    size_bytes: int = 0
+    mime_type: str = "text/plain"
+    code: str | None = None
+    message: str | None = None
+
+
 class LoadedSkillPackage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +155,21 @@ class SkillPromptWarning(BaseModel):
     code: str
     message: str
     package_name: str | None = None
+
+
+class SkillReadResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    skill: SkillCatalogItem | None = None
+    body: str = ""
+    body_truncated: bool = False
+    resource_manifest: SkillResourceManifest = Field(
+        default_factory=SkillResourceManifest
+    )
+    warnings: list[SkillPromptWarning] = Field(default_factory=list)
+    code: str | None = None
+    message: str | None = None
 
 
 class SkillPromptFragment(BaseModel):

@@ -78,6 +78,12 @@ _FORBIDDEN_TEXT_PARTS = (
 )
 _PUBLIC_MESSAGE_BY_CODE = {
     "NOT_CONFIGURED": "LingNeng generation provider is not configured.",
+    "TOOL_CALL_LIMIT_EXCEEDED": (
+        "LingNeng tool call limit was reached for this run."
+    ),
+    "DUPLICATE_TOOL_CALL_SUPPRESSED": (
+        "LingNeng duplicate tool call was suppressed for this run."
+    ),
     "DOCUMENT_GENERATION_PROVIDER_ERROR": "LingNeng document generation provider failed.",
     "DOCUMENT_GENERATION_NO_VALID_ARTIFACTS": (
         "LingNeng document generation returned no valid public artifacts."
@@ -157,6 +163,16 @@ def document_generation_handler(args: dict[str, Any] | None = None, **kwargs: An
         )
 
     raw_args = args or {}
+    from lingneng.tools.limits import guarded_tool_skip_result
+
+    guard_result = guarded_tool_skip_result(
+        "document_generation",
+        raw_args,
+        settings,
+    )
+    if guard_result is not None:
+        return guard_result
+
     request = _build_document_request(raw_args, settings)
     try:
         result = _coerce_result(provider.generate(request), DocumentGenerationResult)

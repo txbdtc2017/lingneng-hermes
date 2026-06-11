@@ -109,7 +109,14 @@ def web_search_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str
             settings=settings,
         )
 
-    request = _build_search_request(args or {}, settings)
+    raw_args = args or {}
+    from lingneng.tools.limits import guarded_tool_skip_result
+
+    guard_result = guarded_tool_skip_result("web_search", raw_args, settings)
+    if guard_result is not None:
+        return guard_result
+
+    request = _build_search_request(raw_args, settings)
     try:
         result = _coerce_result(provider.search(request), WebSearchResult)
     except Exception:

@@ -89,7 +89,18 @@ def chart_visualization_handler(args: dict[str, Any] | None = None, **kwargs: An
             settings=settings,
         )
 
-    request = _build_chart_request(args or {})
+    raw_args = args or {}
+    from lingneng.tools.limits import guarded_tool_skip_result
+
+    guard_result = guarded_tool_skip_result(
+        "chart_visualization",
+        raw_args,
+        settings,
+    )
+    if guard_result is not None:
+        return guard_result
+
+    request = _build_chart_request(raw_args)
     try:
         result = _coerce_result(provider.generate(request), ChartVisualizationResult)
     except Exception:

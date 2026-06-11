@@ -85,6 +85,16 @@ def image_generation_handler(args: dict[str, Any] | None = None, **kwargs: Any) 
         )
 
     raw_args = args or {}
+    from lingneng.tools.limits import guarded_tool_skip_result
+
+    guard_result = guarded_tool_skip_result(
+        "image_generation",
+        raw_args,
+        settings,
+    )
+    if guard_result is not None:
+        return guard_result
+
     request = ImageGenerationRequest(
         prompt=_bounded_text(_text_arg(raw_args.get("prompt")), max_chars=4000),
         count=_normalize_count(raw_args.get("count"), settings),

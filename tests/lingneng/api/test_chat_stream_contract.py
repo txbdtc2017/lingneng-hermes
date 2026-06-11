@@ -14,6 +14,7 @@ from lingneng.schemas.chat_events import (
     AnswerDeltaEvent,
     ErrorEvent,
     FinalEvent,
+    RouteSuggestionEvent,
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -90,6 +91,44 @@ class AgentStepAdapter:
         yield FinalEvent(run_id=run_id, status="succeeded", answer="完成")
 
 
+class RouteSuggestionAdapter:
+    async def stream(
+        self,
+        request: ChatStreamRequest,
+        resolved_session: ResolvedSessionKey,
+        run_id: str,
+    ) -> AsyncIterator[RunStartedEvent | RouteSuggestionEvent | FinalEvent]:
+        yield RunStartedEvent(run_id=run_id, request_id=request.request_id)
+        yield RouteSuggestionEvent(
+            current_employee_type="marketing_planner",
+            target_employee_type="marketing_content_creator",
+            confidence=0.86,
+            reason="需要生成营销内容",
+            reply="交给营销内容创作处理。",
+        )
+        yield FinalEvent(
+            run_id=run_id,
+            status="succeeded",
+            answer="交给营销内容创作处理。",
+            trace_summary={
+                "route": {
+                    "route_event_type": "route_suggestion",
+                    "terminal": True,
+                    "current_employee_type": "marketing_planner",
+                    "target_employee_type": "marketing_content_creator",
+                    "confidence": 0.86,
+                    "query": "用户原始问题",
+                    "reply": "交给营销内容创作处理。",
+                    "reason": "需要生成营销内容",
+                    "pending_confirmation": {"token": "secret-token"},
+                    "token": "secret-token",
+                    "traceback": "Traceback private detail",
+                    "path": "/Users/rotas/private-file",
+                }
+            },
+        )
+
+
 def test_chat_stream_encodes_agent_step_event(tmp_path):
     app = create_app(
         settings=settings(tmp_path),
@@ -107,6 +146,45 @@ def test_chat_stream_encodes_agent_step_event(tmp_path):
         "final",
     ]
     assert frames[1][1]["status"] == "started"
+
+
+def test_chat_stream_encodes_route_event_and_preserves_safe_route_trace(tmp_path):
+    app = create_app(
+        settings=settings(tmp_path),
+        adapter=RouteSuggestionAdapter(),
+        run_store=LingNengRunStore(tmp_path / "runs.sqlite3"),
+    )
+    response = post_stream(TestClient(app), full_payload())
+    frames = parse_sse(response.text)
+    event_names = [event_name for event_name, _data in frames]
+    final_payload = frames[-1][1]
+
+    assert response.status_code == 200
+    assert "error" not in event_names
+    assert "run_started" in event_names
+    assert "route_suggestion" in event_names
+    assert event_names[-1] == "final"
+    assert final_payload["trace_summary"]["route"] == {
+        "route_event_type": "route_suggestion",
+        "terminal": True,
+        "current_employee_type": "marketing_planner",
+        "target_employee_type": "marketing_content_creator",
+        "confidence": 0.86,
+    }
+    route_trace_text = json.dumps(
+        final_payload["trace_summary"]["route"],
+        ensure_ascii=False,
+    )
+    for forbidden in (
+        "query",
+        "reply",
+        "reason",
+        "pending_confirmation",
+        "token",
+        "traceback",
+        "/Users/rotas/private-file",
+    ):
+        assert forbidden not in route_trace_text
 
 
 def test_health_returns_ok(tmp_path):

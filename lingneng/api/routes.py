@@ -18,6 +18,7 @@ from lingneng.observability.logging import (
     build_trace_summary,
     enrich_trace_context,
     log_lingneng_event,
+    sanitize_trace_payload,
 )
 from lingneng.runtime.agent_adapter import AgentRunAdapter
 from lingneng.schemas.chat_events import (
@@ -28,6 +29,9 @@ from lingneng.schemas.chat_events import (
     ErrorEvent,
     FinalEvent,
     RagContextEvent,
+    RouteConfirmRequiredEvent,
+    RouteResultEvent,
+    RouteSuggestionEvent,
     RunStartedEvent,
 )
 from lingneng.schemas.chat_request import ChatStreamRequest
@@ -37,6 +41,16 @@ from lingneng.session.run_store import (
     RunRecord,
     RunStatus,
     RunStoreStateError,
+)
+
+_ROUTE_TRACE_ALLOWED_KEYS = frozenset(
+    {
+        "route_event_type",
+        "terminal",
+        "target_employee_type",
+        "current_employee_type",
+        "confidence",
+    }
 )
 
 
@@ -266,7 +280,12 @@ async def _adapter_stream(
                     answer_chars=answer_chars,
                 )
                 event = event.model_copy(
-                    update={"trace_summary": build_trace_summary(completed_context)}
+                    update={
+                        "trace_summary": _final_trace_summary(
+                            completed_context,
+                            event.trace_summary,
+                        )
+                    }
                 )
                 run_store.mark_succeeded(
                     event.run_id,
@@ -405,6 +424,9 @@ def _event_name(
         | AnswerDeltaEvent
         | FinalEvent
         | ErrorEvent
+        | RouteResultEvent
+        | RouteSuggestionEvent
+        | RouteConfirmRequiredEvent
     ),
 ) -> str:
     if isinstance(event, RunStartedEvent):
@@ -417,6 +439,12 @@ def _event_name(
         return "citation_delta"
     if isinstance(event, RagContextEvent):
         return "rag_context"
+    if isinstance(event, RouteResultEvent):
+        return "route_result"
+    if isinstance(event, RouteSuggestionEvent):
+        return "route_suggestion"
+    if isinstance(event, RouteConfirmRequiredEvent):
+        return "route_confirm_required"
     if isinstance(event, AnswerDeltaEvent):
         return "answer_delta"
     if isinstance(event, FinalEvent):
@@ -428,6 +456,24 @@ def _event_name(
 
 def _unsupported_event(event: object) -> NoReturn:
     raise ValueError(f"Unsupported LingNeng event model: {event.__class__.__name__}")
+
+
+def _final_trace_summary(
+    completed_context: dict[str, Any],
+    adapter_trace_summary: dict[str, Any],
+) -> dict[str, Any]:
+    summary = build_trace_summary(completed_context)
+    route = adapter_trace_summary.get("route")
+    if not isinstance(route, dict):
+        return summary
+
+    safe_route = sanitize_trace_payload(
+        route,
+        allowed_keys=_ROUTE_TRACE_ALLOWED_KEYS,
+    )
+    if safe_route:
+        summary["route"] = safe_route
+    return summary
 
 
 def _active_hermes_session_id(

@@ -24,6 +24,7 @@ from lingneng.events.bridge import (
     final_answer,
     is_artifact_producing_tool,
     rag_events_from_tool_result,
+    route_events_from_tool_result,
     run_started,
 )
 from lingneng.runtime.agent_adapter import LingNengStreamEvent
@@ -186,6 +187,7 @@ class HermesAgentRunAdapter:
         streamed_text: list[str] = []
         rag_citations: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
+        route_trace: dict[str, Any] | None = None
         buffered_answer_events: list[AnswerDeltaEvent] = []
         active_artifact_tools = 0
         answer_flush_scheduled = False
@@ -230,7 +232,7 @@ class HermesAgentRunAdapter:
             args: dict | None = None,
             **kwargs,
         ) -> None:
-            nonlocal active_artifact_tools, tool_sequence
+            nonlocal active_artifact_tools, route_trace, tool_sequence
             with tool_progress_lock:
                 events: list[LingNengStreamEvent]
                 if event_name == "tool.started":
@@ -276,7 +278,15 @@ class HermesAgentRunAdapter:
                         artifacts[:] = dedupe_artifacts(
                             [*artifacts, *new_artifacts]
                         )
-                    events = [event, *artifact_events, *rag_events]
+                    route_events, next_route_trace = (
+                        route_events_from_tool_result(
+                            tool_name=tool_name,
+                            result=kwargs.get("result"),
+                        )
+                    )
+                    if next_route_trace is not None:
+                        route_trace = next_route_trace
+                    events = [event, *artifact_events, *rag_events, *route_events]
                     if is_artifact_producing_tool(tool_name):
                         active_artifact_tools = max(0, active_artifact_tools - 1)
                         if active_artifact_tools == 0 and buffered_answer_events:
@@ -375,6 +385,7 @@ class HermesAgentRunAdapter:
                     buffered_answer_events.clear()
                     active_artifact_tools = 0
                     answer_flush_scheduled = False
+                    final_route_trace = dict(route_trace) if route_trace else None
                 for event in pending_answer_events:
                     yield event
                 if not streamed_text:
@@ -390,6 +401,9 @@ class HermesAgentRunAdapter:
                     ),
                     artifacts=artifacts,
                     settings=self.settings,
+                    trace_summary=(
+                        {"route": final_route_trace} if final_route_trace else {}
+                    ),
                 )
                 return
 

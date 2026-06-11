@@ -15,6 +15,9 @@ from lingneng.schemas.chat_events import (
     FinalEvent,
     RagContextEvent,
     RunStartedEvent,
+    RouteConfirmRequiredEvent,
+    RouteResultEvent,
+    RouteSuggestionEvent,
 )
 from lingneng.tools.artifacts import (
     artifact_from_public_dict,
@@ -23,7 +26,11 @@ from lingneng.tools.artifacts import (
 
 
 RagBridgeEvent = CitationDeltaEvent | RagContextEvent
+RouteBridgeEvent = (
+    RouteResultEvent | RouteSuggestionEvent | RouteConfirmRequiredEvent
+)
 _RAG_TOOL_NAME = "retrieve_rag"
+_ROUTE_TOOL_NAME = "employee_handoff"
 _ARTIFACT_TOOL_NAMES = {
     "document_generation",
     "image_generation",
@@ -224,6 +231,37 @@ def artifact_events_from_tool_result(
     return events, artifacts
 
 
+def route_events_from_tool_result(
+    *,
+    tool_name: str,
+    result: Any,
+) -> tuple[list[RouteBridgeEvent], dict[str, Any] | None]:
+    if tool_name != _ROUTE_TOOL_NAME:
+        return [], None
+
+    payload = _parse_tool_result(result)
+    if payload is None:
+        return [], None
+    if payload.get("success") is not True:
+        return [], None
+
+    route_event_type = payload.get("route_event_type")
+    route = payload.get("route")
+    if not isinstance(route_event_type, str) or not isinstance(route, dict):
+        return [], None
+
+    event_model = _route_event_model(route_event_type)
+    if event_model is None:
+        return [], None
+
+    try:
+        event = event_model.model_validate(route)
+    except ValidationError:
+        return [], None
+
+    return [event], _route_trace_summary(route_event_type, payload, route)
+
+
 def is_artifact_producing_tool(tool_name: str) -> bool:
     return tool_name in _ARTIFACT_TOOL_NAMES
 
@@ -238,6 +276,7 @@ def final_answer(
     citations: list[dict[str, Any]] | None = None,
     artifacts: list[dict[str, Any]] | None = None,
     settings: LingNengSettings | None = None,
+    trace_summary: dict[str, Any] | None = None,
 ) -> FinalEvent:
     return FinalEvent(
         run_id=run_id,
@@ -245,6 +284,7 @@ def final_answer(
         answer=answer,
         citations=citations or [],
         artifacts=_valid_artifact_dicts(artifacts or [], settings=settings),
+        trace_summary=trace_summary or {},
     )
 
 
@@ -355,6 +395,32 @@ def _is_failure_result(payload: dict[str, Any]) -> bool:
         or payload.get("success") is False
         or bool(payload.get("code"))
     )
+
+
+def _route_event_model(
+    route_event_type: str,
+) -> type[RouteBridgeEvent] | None:
+    if route_event_type == "route_result":
+        return RouteResultEvent
+    if route_event_type == "route_suggestion":
+        return RouteSuggestionEvent
+    if route_event_type == "route_confirm_required":
+        return RouteConfirmRequiredEvent
+    return None
+
+
+def _route_trace_summary(
+    route_event_type: str,
+    payload: dict[str, Any],
+    route: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "route_event_type": route_event_type,
+        "terminal": bool(payload.get("terminal")),
+        "target_employee_type": route.get("target_employee_type"),
+        "current_employee_type": route.get("current_employee_type"),
+        "confidence": route.get("confidence"),
+    }
 
 
 def _sanitize_public_value(value: Any) -> Any:

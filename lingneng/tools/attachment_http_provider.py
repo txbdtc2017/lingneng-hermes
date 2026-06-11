@@ -132,7 +132,8 @@ class HttpAttachmentProcessingProvider:
 
             total_bytes = 0
             chunks: list[bytes] = []
-            for chunk in response.iter_bytes():
+            chunk_size = min(65536, self.max_response_bytes + 1)
+            for chunk in response.iter_bytes(chunk_size=chunk_size):
                 total_bytes += len(chunk)
                 if total_bytes > self.max_response_bytes:
                     return _HttpProviderResponse(

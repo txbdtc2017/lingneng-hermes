@@ -206,6 +206,7 @@ def test_http_attachment_provider_sends_bounded_request_and_normalizes_response(
 def test_http_attachment_provider_rejects_oversized_response(tmp_path):
     del tmp_path
     chunks_read: list[bytes] = []
+    chunk_sizes: list[int | None] = []
 
     class FakeStreamResponse:
         status_code = 200
@@ -214,7 +215,8 @@ def test_http_attachment_provider_rejects_oversized_response(tmp_path):
         def content(self) -> bytes:
             raise AssertionError("response content must not be buffered")
 
-        def iter_bytes(self):
+        def iter_bytes(self, *, chunk_size: int | None = None):
+            chunk_sizes.append(chunk_size)
             for chunk in (b"x" * 40, b"y" * 40, b"z" * 40, b"w" * 40):
                 chunks_read.append(chunk)
                 yield chunk
@@ -243,6 +245,7 @@ def test_http_attachment_provider_rejects_oversized_response(tmp_path):
     assert result.status == "failed"
     assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
     assert result.context_text == ""
+    assert chunk_sizes == [101]
     assert chunks_read == [b"x" * 40, b"y" * 40, b"z" * 40]
 
 
@@ -430,6 +433,7 @@ def test_http_attachment_provider_default_client_disables_trust_env(
 ):
     del tmp_path
     captured: dict[str, Any] = {}
+    chunk_sizes: list[int | None] = []
 
     class FakeClient:
         def __init__(self, *, timeout: float, trust_env: bool) -> None:
@@ -459,7 +463,8 @@ def test_http_attachment_provider_default_client_disables_trust_env(
             captured["request_timeout"] = timeout
             return self
 
-        def iter_bytes(self):
+        def iter_bytes(self, *, chunk_size: int | None = None):
+            chunk_sizes.append(chunk_size)
             yield json.dumps(
                 {
                     "status": "succeeded",
@@ -506,4 +511,5 @@ def test_http_attachment_provider_default_client_disables_trust_env(
     assert captured["request_timeout"] == 7
     assert captured["url"] == "https://attachments.example/process"
     assert captured["headers"]["Authorization"] == "Bearer secret-key"
+    assert chunk_sizes == [4097]
     assert result.status == "succeeded"

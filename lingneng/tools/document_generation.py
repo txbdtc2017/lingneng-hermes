@@ -213,7 +213,12 @@ def _build_document_request(
     raw_args: dict[str, Any],
     settings: LingNengSettings,
 ) -> DocumentGenerationRequest:
-    raw_content = _text_arg(raw_args.get("content"))
+    raw_content = _first_non_empty_text_arg(
+        raw_args.get("document_content"),
+        raw_args.get("content"),
+        raw_args.get("markdown"),
+        raw_args.get("content_brief"),
+    )
     bounded_content = _bounded_text(
         raw_content,
         max_chars=settings.document_max_content_chars,
@@ -252,6 +257,14 @@ def _text_arg(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
+
+
+def _first_non_empty_text_arg(*values: Any) -> str:
+    for value in values:
+        text = _text_arg(value)
+        if text:
+            return text
+    return ""
 
 
 def _bounded_text(value: str, *, max_chars: int) -> str:

@@ -6,6 +6,14 @@ from pathlib import Path
 import httpx
 
 from lingneng.config.settings import LingNengSettings
+from lingneng.tools.document_generation import DocumentGenerationRequest
+from lingneng.tools.document_provider import (
+    JavaAgentFileClient,
+    JavaFileDocumentProvider,
+    build_document_source_markdown,
+    safe_document_source_file_name,
+    safe_pdf_file_name,
+)
 from lingneng.tools.providers import (
     build_lingneng_tool_providers,
     build_web_search_provider,
@@ -220,3 +228,171 @@ def test_provider_factory_builds_bocha_provider(tmp_path):
     )
 
     assert provider.__class__.__name__ == "BochaWebSearchProvider"
+
+
+def test_document_source_helpers_match_lingneng_business_behavior():
+    assert (
+        build_document_source_markdown(
+            title="门店报告",
+            document_content="## 结论\n\n正文",
+        )
+        == "# 门店报告\n\n## 结论\n\n正文\n"
+    )
+    assert (
+        build_document_source_markdown(
+            title="门店报告",
+            document_content="```markdown\n# 自定义标题\n\n正文\n```",
+        )
+        == "# 自定义标题\n\n正文\n"
+    )
+    assert safe_document_source_file_name("../门店/报告") == "报告.md"
+    assert safe_document_source_file_name("   ") == "生成文档.md"
+    assert safe_pdf_file_name("..\\secret") == "secret.pdf"
+
+
+def test_java_agent_file_client_uploads_markdown_as_pdf(tmp_path):
+    del tmp_path
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["internal_key"] = request.headers["X-Internal-Key"]
+        captured["request_id"] = request.headers["X-Request-Id"]
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": "https://files.example/doc.pdf"},
+        )
+
+    client = JavaAgentFileClient(
+        base_url="https://java.example",
+        upload_path="upload",
+        internal_key="java-secret",
+        timeout_seconds=3,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    url = client.upload_markdown_as_pdf(
+        file_name="报告.md",
+        markdown="# 报告",
+        request_id="req-1",
+    )
+
+    assert url == "https://files.example/doc.pdf"
+    assert captured["url"] == "https://java.example/upload"
+    assert captured["internal_key"] == "java-secret"
+    assert captured["request_id"] == "req-1"
+    assert "fileFormat" in str(captured["body"])
+    assert "报告.md" in str(captured["body"])
+
+
+def test_java_file_document_provider_returns_external_document_artifact(tmp_path):
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def upload_markdown_as_pdf(
+            self,
+            *,
+            file_name: str,
+            markdown: str,
+            request_id: str | None = None,
+        ) -> str:
+            self.calls.append(
+                {"file_name": file_name, "markdown": markdown, "request_id": request_id}
+            )
+            return "https://files.example/report.pdf"
+
+    fake_client = FakeClient()
+    provider = JavaFileDocumentProvider(
+        settings(tmp_path),
+        java_file_client=fake_client,
+    )
+
+    result = provider.generate(
+        DocumentGenerationRequest(
+            title="经营分析",
+            instruction="生成 PDF",
+            content="## 核心结论\n\n正文",
+            target_format="pdf",
+            original_content_length=10,
+        )
+    )
+
+    assert result.summary == "PDF 文档生成完成"
+    assert fake_client.calls[0]["file_name"] == "经营分析.md"
+    assert str(fake_client.calls[0]["markdown"]).startswith("# 经营分析")
+    artifact = result.artifacts[0]
+    assert artifact["artifact_type"] == "document"
+    assert artifact["source"] == "document_generation"
+    assert artifact["file_name"] == "经营分析.pdf"
+    assert artifact["mime_type"] == "application/pdf"
+    assert artifact["object_key"].startswith("external/java-agent-file/")
+    assert artifact["conversion_required"] is False
+    assert result.safe_output["source_content_sha256"]
+    assert "正文" not in json.dumps(result.safe_output, ensure_ascii=False)
+
+
+def test_document_generation_handler_accepts_legacy_content_aliases(tmp_path):
+    class CapturingProvider:
+        def __init__(self) -> None:
+            self.request = None
+
+        def generate(self, request):
+            self.request = request
+            return {
+                "summary": "ok",
+                "artifacts": [
+                    {
+                        "artifact_id": "artifact-doc-1",
+                        "artifact_type": "document",
+                        "source": "document_generation",
+                        "file_name": "report.pdf",
+                        "mime_type": "application/pdf",
+                        "url": "https://files.example/report.pdf",
+                        "object_key": "external/java-agent-file/artifact-doc-1",
+                        "format": "pdf",
+                        "target_format": "pdf",
+                        "conversion_required": False,
+                        "conversion_owner": None,
+                    }
+                ],
+            }
+
+    from lingneng.tools.document_generation import (
+        document_generation_context,
+        document_generation_handler,
+    )
+
+    cases = [
+        ({"title": "报告", "document_content": "完整正文"}, "完整正文"),
+        ({"title": "报告", "content": "content 正文"}, "content 正文"),
+        ({"title": "报告", "markdown": "markdown 正文"}, "markdown 正文"),
+        ({"title": "报告", "content_brief": "brief 正文"}, "brief 正文"),
+        (
+            {
+                "title": "报告",
+                "document_content": " ",
+                "content": "",
+                "markdown": "markdown 优先",
+                "content_brief": "brief 兜底",
+            },
+            "markdown 优先",
+        ),
+        (
+            {
+                "title": "报告",
+                "content": "content 优先",
+                "markdown": "markdown 次级",
+            },
+            "content 优先",
+        ),
+    ]
+
+    for raw_args, expected_content in cases:
+        provider = CapturingProvider()
+        with document_generation_context(settings(tmp_path), provider=provider):
+            result = json.loads(document_generation_handler(raw_args))
+
+        assert result["success"] is True
+        assert provider.request.content == expected_content

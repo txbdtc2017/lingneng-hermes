@@ -7,8 +7,13 @@ _EXPORTS = {
     "CalendarEventConfig": "lingneng.context.time",
     "CurrentTimeContext": "lingneng.context.time",
     "FestivalCalendarRepository": "lingneng.context.time",
+    "PromptSection": "lingneng.context.prompt",
+    "TOOL_DERIVED_PUBLIC_GUIDANCE_HEADING": "lingneng.context.prompt",
+    "TRUSTED_RUNTIME_CONTEXT_HEADING": "lingneng.context.prompt",
     "TimeContextEvent": "lingneng.context.time",
     "TimeContextService": "lingneng.context.time",
+    "UNTRUSTED_REQUEST_CONTEXT_HEADING": "lingneng.context.prompt",
+    "compose_lingneng_ephemeral_prompt": "lingneng.context.prompt",
 }
 
 __all__ = sorted(_EXPORTS)

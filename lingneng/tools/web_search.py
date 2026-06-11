@@ -29,10 +29,12 @@ _CURRENT_PROVIDER: ContextVar[WebSearchProvider | None] = ContextVar(
     "lingneng_web_search_provider",
     default=None,
 )
-_LINGNENG_TOOL_CONTEXT_ACTIVE: ContextVar[bool] = ContextVar(
-    "lingneng_tool_context_active",
+_WEB_SEARCH_CONTEXT_ACTIVE: ContextVar[bool] = ContextVar(
+    "lingneng_web_search_context_active",
     default=False,
 )
+
+
 class WebSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -65,32 +67,19 @@ def web_search_context(
 ) -> Iterator[None]:
     settings_token = _CURRENT_SETTINGS.set(settings)
     provider_token = _CURRENT_PROVIDER.set(provider)
-    context_token = _LINGNENG_TOOL_CONTEXT_ACTIVE.set(True)
+    context_token = _WEB_SEARCH_CONTEXT_ACTIVE.set(True)
     _clear_tool_definition_cache()
     try:
         yield
     finally:
-        _LINGNENG_TOOL_CONTEXT_ACTIVE.reset(context_token)
+        _WEB_SEARCH_CONTEXT_ACTIVE.reset(context_token)
         _CURRENT_PROVIDER.reset(provider_token)
         _CURRENT_SETTINGS.reset(settings_token)
         _clear_tool_definition_cache()
 
 
-@contextmanager
-def lingneng_tool_context(settings: LingNengSettings) -> Iterator[None]:
-    settings_token = _CURRENT_SETTINGS.set(settings)
-    context_token = _LINGNENG_TOOL_CONTEXT_ACTIVE.set(True)
-    _clear_tool_definition_cache()
-    try:
-        yield
-    finally:
-        _LINGNENG_TOOL_CONTEXT_ACTIVE.reset(context_token)
-        _CURRENT_SETTINGS.reset(settings_token)
-        _clear_tool_definition_cache()
-
-
-def is_lingneng_tool_context_active() -> bool:
-    return _LINGNENG_TOOL_CONTEXT_ACTIVE.get()
+def is_web_search_context_active() -> bool:
+    return _WEB_SEARCH_CONTEXT_ACTIVE.get()
 
 
 def web_search_handler(args: dict[str, Any] | None = None, **kwargs: Any) -> str:

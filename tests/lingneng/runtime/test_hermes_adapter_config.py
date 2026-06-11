@@ -468,7 +468,7 @@ class ConcurrentNoKanbanEnvAgent:
 
 
 @pytest.mark.asyncio
-async def test_hermes_adapter_constructs_agent_with_lingneng_tool_context(
+async def test_hermes_adapter_constructs_agent_with_business_tool_context(
     tmp_path,
 ):
     CapturingAgent.calls = []

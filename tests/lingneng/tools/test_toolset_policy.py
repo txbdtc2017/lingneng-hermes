@@ -10,7 +10,7 @@ import model_tools
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.skill_tools import skill_tool_context
 from lingneng.tools.stubs import LINGNENG_TOOL_NAMES, handler_for
-from lingneng.tools.web_search import lingneng_tool_context, web_search_context
+from lingneng.tools.web_search import web_search_context
 from model_tools import get_tool_definitions
 from toolsets import resolve_toolset, validate_toolset
 from tools.registry import ToolRegistry, registry
@@ -125,7 +125,7 @@ def test_lingneng_tool_registry_entries_are_registered():
 
 def test_lingneng_tool_definitions_expose_only_lingneng_schemas(tmp_path):
     cfg = settings(tmp_path)
-    with lingneng_tool_context(cfg), skill_tool_context(cfg):
+    with web_search_context(cfg, provider=None), skill_tool_context(cfg):
         definitions = get_tool_definitions(
             enabled_toolsets=["lingneng"],
             disabled_toolsets=["kanban"],

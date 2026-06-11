@@ -26,7 +26,6 @@ from lingneng.tools.image_generation import (
 )
 from lingneng.tools.web_search import (
     WebSearchResult,
-    lingneng_tool_context,
     web_search_context,
     web_search_handler,
 )
@@ -857,7 +856,7 @@ def test_lingneng_web_search_schema_context_does_not_pollute_hermes_web_schema(
     model_tools._clear_tool_defs_cache()
 
     try:
-        with lingneng_tool_context(settings(tmp_path)):
+        with web_search_context(settings(tmp_path), provider=None):
             lingneng_defs = get_tool_definitions(
                 enabled_toolsets=["lingneng"],
                 disabled_toolsets=["kanban"],

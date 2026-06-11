@@ -13,7 +13,7 @@ from lingneng.tools.skill_tools import (
 )
 from lingneng.tools.stubs import TOOL_SCHEMAS, iter_tool_entries
 from lingneng.tools.web_search import (
-    is_lingneng_tool_context_active,
+    is_web_search_context_active,
     web_search_handler,
 )
 from tools.registry import registry
@@ -44,7 +44,7 @@ registry.register_context_override(
     name="web_search",
     schema=TOOL_SCHEMAS["web_search"],
     handler=web_search_handler,
-    is_active=is_lingneng_tool_context_active,
+    is_active=is_web_search_context_active,
     fail_closed=True,
     fail_closed_toolsets={"lingneng"},
 )

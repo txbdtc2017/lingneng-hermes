@@ -20,6 +20,11 @@ _LIVE_REQUEST_MARKERS = (
 )
 
 
+def _assert_absent(value: str, haystack: str, description: str) -> None:
+    if value and value in haystack:
+        raise AssertionError(f"live RAG result leaked {description}")
+
+
 def test_live_rag_provider_smoke_is_gated_and_secret_safe(tmp_path):
     env = dict(os.environ)
     env.setdefault("LINGNENG_RUNTIME_DIR", str(tmp_path))
@@ -52,17 +57,15 @@ def test_live_rag_provider_smoke_is_gated_and_secret_safe(tmp_path):
     lowered_serialized = serialized.lower()
     endpoint = settings.rag_endpoint.strip()
     if settings.rag_api_key:
-        assert settings.rag_api_key not in serialized
-    assert query not in serialized
+        _assert_absent(settings.rag_api_key, serialized, "API key")
+    _assert_absent(query, serialized, "live query")
     if endpoint:
-        assert endpoint not in serialized
+        _assert_absent(endpoint, serialized, "endpoint")
     endpoint_parts = urlsplit(endpoint)
     if endpoint_parts.query:
-        assert endpoint_parts.query not in serialized
+        _assert_absent(endpoint_parts.query, serialized, "endpoint query")
         for key, value in parse_qsl(endpoint_parts.query, keep_blank_values=True):
-            if key:
-                assert key not in serialized
-            if value:
-                assert value not in serialized
+            _assert_absent(key, serialized, "endpoint query key")
+            _assert_absent(value, serialized, "endpoint query value")
     for marker in _LIVE_REQUEST_MARKERS:
-        assert marker.lower() not in lowered_serialized
+        _assert_absent(marker.lower(), lowered_serialized, "request marker")

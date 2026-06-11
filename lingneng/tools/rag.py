@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -141,6 +142,12 @@ _PUBLIC_FAILURE_CODES = frozenset(
         "RAG_PROVIDER_TIMEOUT",
     }
 )
+_RAG_FILTER_MAX_DEPTH = 4
+_RAG_FILTER_MAX_KEYS = 32
+_RAG_FILTER_MAX_LIST_ITEMS = 32
+_RAG_FILTER_MAX_STRING_CHARS = 256
+_RAG_FILTER_MAX_SERIALIZED_BYTES = 4096
+_FILTER_DROP = object()
 
 
 @dataclass(frozen=True)
@@ -352,7 +359,62 @@ def _normalize_top_k(value: Any, settings: LingNengSettings) -> int:
 def _normalize_filters(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    return dict(value)
+    normalized = _normalize_filter_mapping(value, depth=0)
+    try:
+        serialized = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return {}
+    if len(serialized.encode("utf-8")) > _RAG_FILTER_MAX_SERIALIZED_BYTES:
+        return {}
+    return normalized
+
+
+def _normalize_filter_mapping(
+    value: dict[Any, Any],
+    *,
+    depth: int,
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if len(normalized) >= _RAG_FILTER_MAX_KEYS:
+            break
+        if not isinstance(key, str):
+            continue
+        normalized_item = _normalize_filter_value(item, depth=depth + 1)
+        if normalized_item is _FILTER_DROP:
+            continue
+        normalized[key[:_RAG_FILTER_MAX_STRING_CHARS]] = normalized_item
+    return normalized
+
+
+def _normalize_filter_value(value: Any, *, depth: int) -> Any:
+    if isinstance(value, dict):
+        if depth > _RAG_FILTER_MAX_DEPTH:
+            return {}
+        return _normalize_filter_mapping(value, depth=depth)
+    if isinstance(value, list | tuple):
+        if depth > _RAG_FILTER_MAX_DEPTH:
+            return []
+        normalized: list[Any] = []
+        for item in value[:_RAG_FILTER_MAX_LIST_ITEMS]:
+            normalized_item = _normalize_filter_value(item, depth=depth + 1)
+            if normalized_item is not _FILTER_DROP:
+                normalized.append(normalized_item)
+        return normalized
+    if isinstance(value, str):
+        return value[:_RAG_FILTER_MAX_STRING_CHARS]
+    if value is None or isinstance(value, bool | int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        return _FILTER_DROP
+    return _FILTER_DROP
 
 
 def _normalize_provider_result(

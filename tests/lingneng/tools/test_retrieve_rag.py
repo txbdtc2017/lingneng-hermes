@@ -118,6 +118,123 @@ def test_retrieve_rag_builds_contextual_request(tmp_path):
     assert sent.filters == {"document_type": "menu"}
 
 
+def test_retrieve_rag_preserves_json_safe_filters(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(status="empty", context="", citations=[], metadata={})
+    )
+    filters = {
+        "document_type": "menu",
+        "count": 2,
+        "score": 0.75,
+        "enabled": True,
+        "missing": None,
+        "nested": {"channel": "wechat"},
+        "items": ["套餐", 3, False, None],
+    }
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        json.loads(
+            retrieve_rag_handler(
+                {
+                    "query": "会员套餐怎么写",
+                    "filters": filters,
+                }
+            )
+        )
+
+    assert provider.requests[0].filters == filters
+
+
+@pytest.mark.parametrize("filters", [None, [], "document_type=menu", 1])
+def test_retrieve_rag_non_dict_filters_become_empty_object(tmp_path, filters):
+    provider = FakeRagProvider(
+        RagRetrieveResult(status="empty", context="", citations=[], metadata={})
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        json.loads(
+            retrieve_rag_handler(
+                {
+                    "query": "会员套餐怎么写",
+                    "filters": filters,
+                }
+            )
+        )
+
+    assert provider.requests[0].filters == {}
+
+
+def test_retrieve_rag_truncates_long_filter_strings_and_bounds_depth(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(status="empty", context="", citations=[], metadata={})
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        json.loads(
+            retrieve_rag_handler(
+                {
+                    "query": "会员套餐怎么写",
+                    "filters": {
+                        "long": "x" * 300,
+                        "nested": {"a": {"b": {"c": {"d": {"e": "deep"}}}}},
+                    },
+                }
+            )
+        )
+
+    assert provider.requests[0].filters == {
+        "long": "x" * 256,
+        "nested": {"a": {"b": {"c": {"d": {}}}}},
+    }
+
+
+def test_retrieve_rag_drops_unsupported_filter_values(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(status="empty", context="", citations=[], metadata={})
+    )
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        json.loads(
+            retrieve_rag_handler(
+                {
+                    "query": "会员套餐怎么写",
+                    "filters": {
+                        "safe": "value",
+                        "bad": object(),
+                        "raw": b"raw",
+                        "items": [object(), "ok", b"raw"],
+                        "nested": {"bad": object(), "safe": 1},
+                    },
+                }
+            )
+        )
+
+    assert provider.requests[0].filters == {
+        "safe": "value",
+        "items": ["ok"],
+        "nested": {"safe": 1},
+    }
+
+
+def test_retrieve_rag_oversized_serialized_filter_returns_empty_object(tmp_path):
+    provider = FakeRagProvider(
+        RagRetrieveResult(status="empty", context="", citations=[], metadata={})
+    )
+    filters = {f"k{i}": "x" * 256 for i in range(32)}
+
+    with rag_request_context(make_context(tmp_path), provider=provider):
+        json.loads(
+            retrieve_rag_handler(
+                {
+                    "query": "会员套餐怎么写",
+                    "filters": filters,
+                }
+            )
+        )
+
+    assert provider.requests[0].filters == {}
+
+
 def test_retrieve_rag_uses_default_top_k_and_truncates_context(tmp_path):
     provider = FakeRagProvider(
         RagRetrieveResult(

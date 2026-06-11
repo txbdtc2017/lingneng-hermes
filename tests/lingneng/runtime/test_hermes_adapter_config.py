@@ -29,7 +29,6 @@ from lingneng.session.keys import resolve_session_key
 from lingneng.session.run_store import LingNengRunStore
 from lingneng.tools.attachments import (
     AttachmentProcessingResult,
-    attachment_processing_context,
 )
 from tests.lingneng.skills.test_skill_loader import write_skill
 from tests.lingneng.schemas.test_chat_request_schema import full_payload
@@ -676,7 +675,107 @@ async def test_adapter_injects_time_context_with_trust_sections(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_attachment_context_uses_untrusted_prompt_section(tmp_path):
+async def test_hermes_adapter_uses_configured_attachment_provider(
+    tmp_path,
+    monkeypatch,
+):
+    class Provider:
+        def __init__(self):
+            self.requests = []
+
+        def process(self, request):
+            self.requests.append(request)
+            return AttachmentProcessingResult(
+                context_text="配置 provider 附件摘要",
+                selected_count=1,
+                processed_count=1,
+            )
+
+    provider = Provider()
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
+    payload = full_payload()
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.txt",
+            "mime_type": "text/plain",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.txt",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+    RecordingSystemPromptAgent.system_message_seen = ""
+    RecordingSystemPromptAgent.ephemeral_system_prompt_seen = ""
+
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert provider.requests
+    assert isinstance(events[-1], FinalEvent)
+    assert "配置 provider 附件摘要" in effective_system_prompt()
+
+
+@pytest.mark.asyncio
+async def test_hermes_adapter_attachment_provider_build_failure_is_fail_closed(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    def fail_build(settings):
+        del settings
+        raise RuntimeError("secret-token /Users/rotas/private")
+
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        fail_build,
+        raising=False,
+    )
+    payload = full_payload()
+    payload["attachments"] = [
+        {
+            "file_id": "file-1",
+            "file_name": "menu.txt",
+            "mime_type": "text/plain",
+            "size": 100,
+            "download_url": "https://files.example.test/menu.txt",
+        }
+    ]
+    request = ChatStreamRequest.model_validate(payload)
+    resolved = resolve_session_key(request)
+    adapter = HermesAgentRunAdapter(
+        settings=settings(
+            tmp_path,
+            LINGNENG_AGENT_MODE="hermes",
+            LINGNENG_ATTACHMENT_ALLOWED_HOSTS="files.example.test",
+        ),
+        agent_cls=RecordingSystemPromptAgent,
+    )
+
+    with caplog.at_level("WARNING", logger="lingneng.runtime.hermes_adapter"):
+        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+
+    assert isinstance(events[-1], FinalEvent)
+    assert not any(isinstance(event, ErrorEvent) for event in events)
+    assert "secret-token" not in caplog.text
+    assert "/Users/rotas" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_uses_untrusted_prompt_section(tmp_path, monkeypatch):
     payload = full_payload()
     payload["attachments"] = [
         {
@@ -706,9 +805,14 @@ async def test_attachment_context_uses_untrusted_prompt_section(tmp_path):
             processed_count=1,
         )
     )
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        [event async for event in adapter.stream(request, resolved, "run-1")]
+    [event async for event in adapter.stream(request, resolved, "run-1")]
 
     prompt = effective_system_prompt()
     assert UNTRUSTED_REQUEST_CONTEXT_HEADING in prompt
@@ -848,6 +952,7 @@ async def test_time_context_is_built_once_per_request_and_refreshed(tmp_path):
 @pytest.mark.asyncio
 async def test_attachment_context_is_added_to_current_system_prompt_only(
     tmp_path,
+    monkeypatch,
 ):
     payload = full_payload()
     payload["history"] = [
@@ -888,9 +993,14 @@ async def test_attachment_context_is_added_to_current_system_prompt_only(
         )
     )
     RecordingSystemPromptAgent.system_message_seen = ""
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
     first_system_prompt = RecordingSystemPromptAgent.system_message_seen
     first_ephemeral_prompt = RecordingSystemPromptAgent.ephemeral_system_prompt_seen
     first_prompt = effective_system_prompt()
@@ -918,7 +1028,10 @@ async def test_attachment_context_is_added_to_current_system_prompt_only(
 
 
 @pytest.mark.asyncio
-async def test_attachment_context_is_not_persisted_in_session_system_prompt(tmp_path):
+async def test_attachment_context_is_not_persisted_in_session_system_prompt(
+    tmp_path,
+    monkeypatch,
+):
     payload = full_payload()
     payload["attachments"] = [
         {
@@ -950,9 +1063,14 @@ async def test_attachment_context_is_not_persisted_in_session_system_prompt(tmp_
             processed_count=1,
         )
     )
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        [event async for event in adapter.stream(request, resolved, "run-1")]
+    [event async for event in adapter.stream(request, resolved, "run-1")]
     stored_prompt = adapter.session_store.db.get_session(resolved.session_key)[
         "system_prompt"
     ]
@@ -968,7 +1086,10 @@ async def test_attachment_context_is_not_persisted_in_session_system_prompt(tmp_
 
 
 @pytest.mark.asyncio
-async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_path):
+async def test_attachment_prompt_section_order_is_after_skill_before_rag(
+    tmp_path,
+    monkeypatch,
+):
     skill_root = tmp_path / "skills"
     write_skill(
         skill_root,
@@ -1007,9 +1128,14 @@ async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_pat
         )
     )
     RecordingSystemPromptAgent.system_message_seen = ""
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        [event async for event in adapter.stream(request, resolved, "run-1")]
+    [event async for event in adapter.stream(request, resolved, "run-1")]
 
     prompt = effective_system_prompt()
     skill_index = prompt.index("## LingNeng Skill Context")
@@ -1020,7 +1146,10 @@ async def test_attachment_prompt_section_order_is_after_skill_before_rag(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_attachment_processing_emits_started_and_completed_steps(tmp_path):
+async def test_attachment_processing_emits_started_and_completed_steps(
+    tmp_path,
+    monkeypatch,
+):
     request = ChatStreamRequest.model_validate(full_payload())
     resolved = resolve_session_key(request)
     adapter = HermesAgentRunAdapter(
@@ -1038,9 +1167,14 @@ async def test_attachment_processing_emits_started_and_completed_steps(tmp_path)
             processed_count=1,
         )
     )
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
     attachment_steps = [
         event
@@ -1051,7 +1185,10 @@ async def test_attachment_processing_emits_started_and_completed_steps(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_attachment_started_step_streams_before_provider_finishes(tmp_path):
+async def test_attachment_started_step_streams_before_provider_finishes(
+    tmp_path,
+    monkeypatch,
+):
     request = ChatStreamRequest.model_validate(full_payload())
     resolved = resolve_session_key(request)
     adapter = HermesAgentRunAdapter(
@@ -1064,23 +1201,28 @@ async def test_attachment_started_step_streams_before_provider_finishes(tmp_path
         agent_cls=RecordingSystemPromptAgent,
     )
     provider = BlockingAttachmentProvider()
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        stream = adapter.stream(request, resolved, "run-1")
-        try:
-            await anext(stream)
-            started_event = await asyncio.wait_for(anext(stream), timeout=0.25)
+    stream = adapter.stream(request, resolved, "run-1")
+    try:
+        await anext(stream)
+        started_event = await asyncio.wait_for(anext(stream), timeout=0.25)
 
-            assert isinstance(started_event, AgentStepEvent)
-            assert started_event.title == "attachment_processing"
-            assert started_event.status == "started"
-            assert not provider.finished.is_set()
+        assert isinstance(started_event, AgentStepEvent)
+        assert started_event.title == "attachment_processing"
+        assert started_event.status == "started"
+        assert not provider.finished.is_set()
 
-            provider.release.set()
-            remaining = [event async for event in stream]
-        finally:
-            provider.release.set()
-            await stream.aclose()
+        provider.release.set()
+        remaining = [event async for event in stream]
+    finally:
+        provider.release.set()
+        await stream.aclose()
 
     attachment_steps = [
         event
@@ -1114,7 +1256,10 @@ async def test_attachment_processing_emits_started_and_skipped_steps(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_attachment_processing_emits_started_and_failed_steps(tmp_path):
+async def test_attachment_processing_emits_started_and_failed_steps(
+    tmp_path,
+    monkeypatch,
+):
     request = ChatStreamRequest.model_validate(full_payload())
     resolved = resolve_session_key(request)
     adapter = HermesAgentRunAdapter(
@@ -1128,9 +1273,14 @@ async def test_attachment_processing_emits_started_and_failed_steps(tmp_path):
     provider = FakeAttachmentProvider(
         RuntimeError("traceback secret-token /Users/rotas/private")
     )
+    monkeypatch.setattr(
+        hermes_adapter_module,
+        "build_attachment_processing_provider",
+        lambda settings: provider,
+        raising=False,
+    )
 
-    with attachment_processing_context(provider=provider):
-        events = [event async for event in adapter.stream(request, resolved, "run-1")]
+    events = [event async for event in adapter.stream(request, resolved, "run-1")]
 
     attachment_steps = [
         event

@@ -37,8 +37,11 @@ from lingneng.schemas.chat_request import ChatStreamRequest
 from lingneng.session.hermes_session import LingNengHermesSessionStore
 from lingneng.session.keys import ResolvedSessionKey
 from lingneng.skills.loader import LingNengSkillLoader
+from lingneng.tools.attachment_provider import build_attachment_processing_provider
 from lingneng.tools.attachments import (
+    AttachmentProcessingProvider,
     AttachmentPromptContext,
+    attachment_processing_context,
     build_attachment_prompt_context,
 )
 from lingneng.tools.employee_handoff import (
@@ -182,6 +185,18 @@ def _build_route_pending_store(
         _LOGGER.warning(
             "LingNeng route pending store unavailable; route confirmations "
             "will not be persisted."
+        )
+        return None
+
+
+def _build_attachment_provider(
+    settings: LingNengSettings,
+) -> AttachmentProcessingProvider | None:
+    try:
+        return build_attachment_processing_provider(settings)
+    except Exception:
+        _LOGGER.warning(
+            "LingNeng attachment provider construction failed; provider disabled."
         )
         return None
 
@@ -366,6 +381,7 @@ class HermesAgentRunAdapter:
                         pending_store=_build_route_pending_store(self.settings),
                     )
                     providers = build_lingneng_tool_providers(self.settings)
+                    attachment_provider = _build_attachment_provider(self.settings)
                     with (
                         web_search_context(
                             self.settings,
@@ -386,6 +402,7 @@ class HermesAgentRunAdapter:
                         tool_run_guard_context(self.settings),
                         skill_tool_context(self.settings),
                         employee_handoff_context(handoff_context),
+                        attachment_processing_context(provider=attachment_provider),
                     ):
                         _emit_attachment_started(
                             request=request,

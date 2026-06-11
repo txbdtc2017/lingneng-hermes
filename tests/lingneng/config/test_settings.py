@@ -259,6 +259,79 @@ def test_phase_11_time_context_settings_from_env(tmp_path):
     assert settings.prompt_section_max_chars == 2400
 
 
+def test_phase_12_provider_settings_defaults(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+    assert settings.web_search_provider == ""
+    assert settings.bocha_web_search_api_key == ""
+    assert settings.bocha_web_search_base_url == "https://api.bochaai.com"
+    assert settings.bocha_web_search_timeout_seconds == 30.0
+    assert settings.document_provider == ""
+    assert settings.java_agent_file_base_url == ""
+    assert settings.java_agent_file_upload_path == "/ai/internal/agent-file/upload"
+    assert settings.java_internal_key == ""
+    assert settings.java_agent_file_upload_timeout_seconds == 120.0
+    assert settings.image_provider == ""
+    assert settings.aigc_image_base_url == ""
+    assert settings.aigc_image_timeout_seconds == 30.0
+    assert settings.aigc_result_store == ""
+    assert settings.aigc_redis_url == ""
+    assert settings.aigc_redis_key_prefix == "lingneng-agent"
+    assert settings.aigc_result_ttl_seconds == 7200
+    assert settings.aigc_result_wait_timeout_seconds == 300.0
+    assert settings.aigc_result_poll_interval_seconds == 1.0
+    assert settings.tool_artifact_max_calls_per_run == 3
+    assert settings.web_search_max_calls_per_run == 12
+    assert settings.duplicate_artifact_guard_enabled is True
+
+    summary = settings.ready_summary()
+    assert summary["web_search_configured"] is False
+    assert summary["document_provider_configured"] is False
+    assert summary["image_provider_configured"] is False
+    assert summary["aigc_result_store_configured"] is False
+
+
+def test_phase_12_provider_settings_from_env_are_secret_safe(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_WEB_SEARCH_PROVIDER": "bocha",
+            "LINGNENG_BOCHA_WEB_SEARCH_API_KEY": "bocha-secret",
+            "LINGNENG_BOCHA_WEB_SEARCH_BASE_URL": "https://bocha.example",
+            "LINGNENG_BOCHA_WEB_SEARCH_TIMEOUT_SECONDS": "5.5",
+            "LINGNENG_DOCUMENT_PROVIDER": "java_file",
+            "LINGNENG_JAVA_AGENT_FILE_BASE_URL": "https://java-file.example",
+            "LINGNENG_JAVA_AGENT_FILE_UPLOAD_PATH": "upload",
+            "LINGNENG_JAVA_INTERNAL_KEY": "java-secret",
+            "LINGNENG_JAVA_AGENT_FILE_UPLOAD_TIMEOUT_SECONDS": "33",
+            "LINGNENG_IMAGE_PROVIDER": "aigc",
+            "LINGNENG_AIGC_IMAGE_BASE_URL": "https://aigc.example",
+            "LINGNENG_AIGC_IMAGE_TIMEOUT_SECONDS": "44",
+            "LINGNENG_AIGC_RESULT_STORE": "redis",
+            "LINGNENG_AIGC_REDIS_URL": "redis://:redis-secret@localhost:6379/0",
+            "LINGNENG_AIGC_REDIS_KEY_PREFIX": "ln:test",
+            "LINGNENG_AIGC_RESULT_TTL_SECONDS": "60",
+            "LINGNENG_AIGC_RESULT_WAIT_TIMEOUT_SECONDS": "8",
+            "LINGNENG_AIGC_RESULT_POLL_INTERVAL_SECONDS": "0.2",
+            "LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN": "2",
+            "LINGNENG_WEB_SEARCH_MAX_CALLS_PER_RUN": "4",
+            "LINGNENG_DUPLICATE_ARTIFACT_GUARD_ENABLED": "false",
+        }
+    )
+
+    assert settings.java_agent_file_upload_path == "/upload"
+    assert settings.web_search_configured is True
+    assert settings.document_provider_configured is True
+    assert settings.image_provider_configured is True
+    assert settings.aigc_result_store_configured is True
+    assert settings.duplicate_artifact_guard_enabled is False
+
+    dumped = repr(settings.ready_summary())
+    assert "bocha-secret" not in dumped
+    assert "java-secret" not in dumped
+    assert "redis-secret" not in dumped
+
+
 def test_skill_roots_parse_json_comma_and_newline(tmp_path):
     first = tmp_path / "employees"
     second = tmp_path / "tasks"

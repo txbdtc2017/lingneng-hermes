@@ -100,6 +100,27 @@ class LingNengSettings(BaseModel):
     time_context_max_events: int = Field(default=5, ge=0)
     time_context_prompt_max_chars: int = Field(default=3000, ge=500)
     prompt_section_max_chars: int = Field(default=8000, ge=500)
+    web_search_provider: str = ""
+    bocha_web_search_api_key: str = Field(default="", repr=False)
+    bocha_web_search_base_url: str = "https://api.bochaai.com"
+    bocha_web_search_timeout_seconds: float = Field(default=30.0, ge=0.1)
+    document_provider: str = ""
+    java_agent_file_base_url: str = ""
+    java_agent_file_upload_path: str = "/ai/internal/agent-file/upload"
+    java_internal_key: str = Field(default="", repr=False)
+    java_agent_file_upload_timeout_seconds: float = Field(default=120.0, ge=0.1)
+    image_provider: str = ""
+    aigc_image_base_url: str = ""
+    aigc_image_timeout_seconds: float = Field(default=30.0, ge=0.1)
+    aigc_result_store: str = ""
+    aigc_redis_url: str = Field(default="", repr=False)
+    aigc_redis_key_prefix: str = "lingneng-agent"
+    aigc_result_ttl_seconds: int = Field(default=7200, ge=1)
+    aigc_result_wait_timeout_seconds: float = Field(default=300.0, ge=0.1)
+    aigc_result_poll_interval_seconds: float = Field(default=1.0, ge=0.01)
+    tool_artifact_max_calls_per_run: int = Field(default=3, ge=1)
+    web_search_max_calls_per_run: int = Field(default=12, ge=1)
+    duplicate_artifact_guard_enabled: bool = True
 
     @model_validator(mode="after")
     def _default_storage_paths(self) -> "LingNengSettings":
@@ -107,6 +128,12 @@ class LingNengSettings(BaseModel):
             self.session_db_path = self.runtime_dir / "sessions.sqlite3"
         if self.route_pending_db_path is None:
             self.route_pending_db_path = self.runtime_dir / "route_pending.sqlite3"
+        upload_path = self.java_agent_file_upload_path.strip()
+        if not upload_path:
+            upload_path = "/"
+        elif not upload_path.startswith("/"):
+            upload_path = f"/{upload_path}"
+        self.java_agent_file_upload_path = upload_path
         return self
 
     @classmethod
@@ -238,6 +265,56 @@ class LingNengSettings(BaseModel):
             prompt_section_max_chars=int(
                 source.get("LINGNENG_PROMPT_SECTION_MAX_CHARS", "8000")
             ),
+            web_search_provider=source.get("LINGNENG_WEB_SEARCH_PROVIDER", ""),
+            bocha_web_search_api_key=source.get(
+                "LINGNENG_BOCHA_WEB_SEARCH_API_KEY", ""
+            ),
+            bocha_web_search_base_url=source.get(
+                "LINGNENG_BOCHA_WEB_SEARCH_BASE_URL", "https://api.bochaai.com"
+            ),
+            bocha_web_search_timeout_seconds=float(
+                source.get("LINGNENG_BOCHA_WEB_SEARCH_TIMEOUT_SECONDS", "30.0")
+            ),
+            document_provider=source.get("LINGNENG_DOCUMENT_PROVIDER", ""),
+            java_agent_file_base_url=source.get(
+                "LINGNENG_JAVA_AGENT_FILE_BASE_URL", ""
+            ),
+            java_agent_file_upload_path=source.get(
+                "LINGNENG_JAVA_AGENT_FILE_UPLOAD_PATH",
+                "/ai/internal/agent-file/upload",
+            ),
+            java_internal_key=source.get("LINGNENG_JAVA_INTERNAL_KEY", ""),
+            java_agent_file_upload_timeout_seconds=float(
+                source.get("LINGNENG_JAVA_AGENT_FILE_UPLOAD_TIMEOUT_SECONDS", "120.0")
+            ),
+            image_provider=source.get("LINGNENG_IMAGE_PROVIDER", ""),
+            aigc_image_base_url=source.get("LINGNENG_AIGC_IMAGE_BASE_URL", ""),
+            aigc_image_timeout_seconds=float(
+                source.get("LINGNENG_AIGC_IMAGE_TIMEOUT_SECONDS", "30.0")
+            ),
+            aigc_result_store=source.get("LINGNENG_AIGC_RESULT_STORE", ""),
+            aigc_redis_url=source.get("LINGNENG_AIGC_REDIS_URL", ""),
+            aigc_redis_key_prefix=source.get(
+                "LINGNENG_AIGC_REDIS_KEY_PREFIX", "lingneng-agent"
+            ),
+            aigc_result_ttl_seconds=int(
+                source.get("LINGNENG_AIGC_RESULT_TTL_SECONDS", "7200")
+            ),
+            aigc_result_wait_timeout_seconds=float(
+                source.get("LINGNENG_AIGC_RESULT_WAIT_TIMEOUT_SECONDS", "300.0")
+            ),
+            aigc_result_poll_interval_seconds=float(
+                source.get("LINGNENG_AIGC_RESULT_POLL_INTERVAL_SECONDS", "1.0")
+            ),
+            tool_artifact_max_calls_per_run=int(
+                source.get("LINGNENG_TOOL_ARTIFACT_MAX_CALLS_PER_RUN", "3")
+            ),
+            web_search_max_calls_per_run=int(
+                source.get("LINGNENG_WEB_SEARCH_MAX_CALLS_PER_RUN", "12")
+            ),
+            duplicate_artifact_guard_enabled=_bool_from_env(
+                source.get("LINGNENG_DUPLICATE_ARTIFACT_GUARD_ENABLED"), True
+            ),
         )
 
     @property
@@ -253,6 +330,37 @@ class LingNengSettings(BaseModel):
         if self.internal_api_key:
             return True
         return self.is_local_like and self.allow_insecure_local
+
+    @property
+    def web_search_configured(self) -> bool:
+        return (
+            self.web_search_provider.strip().lower() == "bocha"
+            and bool(self.bocha_web_search_api_key.strip())
+        )
+
+    @property
+    def document_provider_configured(self) -> bool:
+        return (
+            self.document_provider.strip().lower() == "java_file"
+            and bool(self.java_agent_file_base_url.strip())
+            and bool(self.java_internal_key.strip())
+        )
+
+    @property
+    def image_provider_configured(self) -> bool:
+        return (
+            self.image_provider.strip().lower() == "aigc"
+            and bool(self.aigc_image_base_url.strip())
+            and self.aigc_result_store.strip().lower() == "redis"
+            and bool(self.aigc_redis_url.strip())
+        )
+
+    @property
+    def aigc_result_store_configured(self) -> bool:
+        return (
+            self.aigc_result_store.strip().lower() == "redis"
+            and bool(self.aigc_redis_url.strip())
+        )
 
     def ready_summary(self) -> dict[str, object]:
         return {
@@ -270,4 +378,8 @@ class LingNengSettings(BaseModel):
             "artifact_url_allow_list_count": len(self.artifact_url_allowed_hosts),
             "attachment_host_allow_list_count": len(self.attachment_allowed_hosts),
             "time_context_enabled": self.time_context_enabled,
+            "web_search_configured": self.web_search_configured,
+            "document_provider_configured": self.document_provider_configured,
+            "image_provider_configured": self.image_provider_configured,
+            "aigc_result_store_configured": self.aigc_result_store_configured,
         }

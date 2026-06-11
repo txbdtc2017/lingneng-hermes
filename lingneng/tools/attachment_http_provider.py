@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from typing import Any
 
@@ -17,6 +18,13 @@ from lingneng.tools.attachments import (
 
 class HttpAttachmentProcessingProviderError(Exception):
     """Internal marker for sanitized HTTP provider failures."""
+
+
+@dataclass(frozen=True)
+class _HttpProviderResponse:
+    status_code: int
+    content: bytes = b""
+    exceeded_size: bool = False
 
 
 class HttpAttachmentProcessingProvider:
@@ -39,7 +47,7 @@ class HttpAttachmentProcessingProvider:
         api_key: str = "",
         timeout_seconds: float = 30.0,
         max_response_bytes: int = 1048576,
-        http_client: httpx.Client | None = None,
+        http_client: Any | None = None,
     ) -> None:
         clean_endpoint = endpoint.strip()
         if not clean_endpoint:
@@ -61,14 +69,13 @@ class HttpAttachmentProcessingProvider:
         except Exception:
             return _failure("ATTACHMENT_PROVIDER_ERROR")
 
-        content = response.content
-        if len(content) > self.max_response_bytes:
+        if response.exceeded_size:
             return _failure("ATTACHMENT_PROVIDER_INVALID_RESULT")
         if response.status_code < 200 or response.status_code >= 300:
             return _failure("ATTACHMENT_PROVIDER_ERROR")
 
         try:
-            payload = json.loads(content.decode("utf-8"))
+            payload = json.loads(response.content.decode("utf-8"))
             return AttachmentProcessingResult.model_validate(payload)
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError):
             return _failure("ATTACHMENT_PROVIDER_INVALID_RESULT")
@@ -94,22 +101,49 @@ class HttpAttachmentProcessingProvider:
             ],
         }
 
-    def _post(self, payload: dict[str, Any]) -> httpx.Response:
+    def _post(self, payload: dict[str, Any]) -> _HttpProviderResponse:
         headers = {"Accept": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         if self._http_client is not None:
-            return self._http_client.post(
-                self.endpoint,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout_seconds,
-            )
+            return self._stream_post(self._http_client, payload, headers)
         with httpx.Client(
             timeout=self.timeout_seconds,
             trust_env=False,
         ) as client:
-            return client.post(self.endpoint, json=payload, headers=headers)
+            return self._stream_post(client, payload, headers)
+
+    def _stream_post(
+        self,
+        client: Any,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> _HttpProviderResponse:
+        with client.stream(
+            "POST",
+            self.endpoint,
+            json=payload,
+            headers=headers,
+            timeout=self.timeout_seconds,
+        ) as response:
+            status_code = int(response.status_code)
+            if status_code < 200 or status_code >= 300:
+                return _HttpProviderResponse(status_code=status_code)
+
+            total_bytes = 0
+            chunks: list[bytes] = []
+            for chunk in response.iter_bytes():
+                total_bytes += len(chunk)
+                if total_bytes > self.max_response_bytes:
+                    return _HttpProviderResponse(
+                        status_code=status_code,
+                        exceeded_size=True,
+                    )
+                chunks.append(chunk)
+            return _HttpProviderResponse(
+                status_code=status_code,
+                content=b"".join(chunks),
+            )
 
 
 def _attachment_payload(attachment: AttachmentPayload) -> dict[str, Any]:

@@ -205,22 +205,37 @@ def test_http_attachment_provider_sends_bounded_request_and_normalizes_response(
 
 def test_http_attachment_provider_rejects_oversized_response(tmp_path):
     del tmp_path
+    chunks_read: list[bytes] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        del request
-        return httpx.Response(
-            200,
-            content=b'{"status":"succeeded","context_text":"'
-            + b"x" * 200
-            + b'"}',
-        )
+    class FakeStreamResponse:
+        status_code = 200
+
+        @property
+        def content(self) -> bytes:
+            raise AssertionError("response content must not be buffered")
+
+        def iter_bytes(self):
+            for chunk in (b"x" * 40, b"y" * 40, b"z" * 40, b"w" * 40):
+                chunks_read.append(chunk)
+                yield chunk
+
+    class FakeStreamContext:
+        def __enter__(self) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    class FakeClient:
+        def stream(self, *args: Any, **kwargs: Any) -> FakeStreamContext:
+            return FakeStreamContext()
 
     provider = HttpAttachmentProcessingProvider(
         endpoint="https://attachments.example/process",
         api_key="secret-key",
         timeout_seconds=3,
         max_response_bytes=100,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        http_client=FakeClient(),
     )
 
     result = provider.process(attachment_request())
@@ -228,6 +243,7 @@ def test_http_attachment_provider_rejects_oversized_response(tmp_path):
     assert result.status == "failed"
     assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
     assert result.context_text == ""
+    assert chunks_read == [b"x" * 40, b"y" * 40, b"z" * 40]
 
 
 def test_http_attachment_provider_sanitizes_failures(tmp_path):
@@ -280,6 +296,45 @@ def test_http_attachment_provider_rejects_redirect_with_valid_json(tmp_path):
         timeout_seconds=3,
         max_response_bytes=4096,
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(attachment_request())
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_ERROR"
+    assert result.context_text == ""
+
+
+def test_http_attachment_provider_rejects_non_2xx_without_reading_body(tmp_path):
+    del tmp_path
+
+    class FakeStreamResponse:
+        status_code = 500
+
+        @property
+        def content(self) -> bytes:
+            raise AssertionError("response content must not be buffered")
+
+        def iter_bytes(self):
+            raise AssertionError("non-2xx response body must not be read")
+
+    class FakeStreamContext:
+        def __enter__(self) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    class FakeClient:
+        def stream(self, *args: Any, **kwargs: Any) -> FakeStreamContext:
+            return FakeStreamContext()
+
+    provider = HttpAttachmentProcessingProvider(
+        endpoint="https://attachments.example/process",
+        api_key="secret-key",
+        timeout_seconds=3,
+        max_response_bytes=4096,
+        http_client=FakeClient(),
     )
 
     result = provider.process(attachment_request())
@@ -388,6 +443,41 @@ def test_http_attachment_provider_default_client_disables_trust_env(
         def __exit__(self, *exc_info: object) -> None:
             captured["exited"] = True
 
+        def stream(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+            timeout: float,
+        ) -> Any:
+            captured["method"] = method
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            captured["request_timeout"] = timeout
+            return self
+
+        def iter_bytes(self):
+            yield json.dumps(
+                {
+                    "status": "succeeded",
+                    "context_text": "ok",
+                    "processed_count": 1,
+                    "failed_count": 0,
+                    "selected_count": 1,
+                }
+            ).encode()
+
+        @property
+        def status_code(self) -> int:
+            return 200
+
+        @property
+        def content(self) -> bytes:
+            raise AssertionError("response content must not be buffered")
+
         def post(
             self,
             url: str,
@@ -395,19 +485,8 @@ def test_http_attachment_provider_default_client_disables_trust_env(
             json: dict[str, Any],
             headers: dict[str, str],
         ) -> httpx.Response:
-            captured["url"] = url
-            captured["json"] = json
-            captured["headers"] = headers
-            return httpx.Response(
-                200,
-                json={
-                    "status": "succeeded",
-                    "context_text": "ok",
-                    "processed_count": 1,
-                    "failed_count": 0,
-                    "selected_count": 1,
-                },
-            )
+            del url, json, headers
+            raise AssertionError("default client path must use stream")
 
     monkeypatch.setattr(http_provider_module.httpx, "Client", FakeClient)
     provider = HttpAttachmentProcessingProvider(
@@ -423,6 +502,8 @@ def test_http_attachment_provider_default_client_disables_trust_env(
     assert captured["trust_env"] is False
     assert captured["entered"] is True
     assert captured["exited"] is True
+    assert captured["method"] == "POST"
+    assert captured["request_timeout"] == 7
     assert captured["url"] == "https://attachments.example/process"
     assert captured["headers"]["Authorization"] == "Bearer secret-key"
     assert result.status == "succeeded"

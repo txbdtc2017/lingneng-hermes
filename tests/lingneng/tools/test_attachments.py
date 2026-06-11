@@ -174,6 +174,40 @@ def test_attachment_prompt_text_percent_decodes_before_secret_checks(
     assert "/users/rotas" not in dumped
 
 
+@pytest.mark.parametrize(
+    "context_text",
+    [
+        "summary https://bucket.example/file.pdf?AWSAccessKeyId=abc&Signature=def",
+        "summary https://bucket.example/file.pdf?X-Amz-Signature%3Dabc",
+    ],
+)
+def test_attachment_prompt_text_rejects_signed_url_markers(
+    tmp_path,
+    context_text,
+):
+    provider = FakeAttachmentProvider(
+        AttachmentProcessingResult(
+            context_text=context_text,
+            processed_count=1,
+            failed_count=0,
+            selected_count=1,
+        )
+    )
+
+    with attachment_processing_context(provider=provider):
+        result = build_attachment_prompt_context(
+            settings(tmp_path),
+            request_with_attachments(attachment()),
+        )
+
+    dumped = json.dumps(result.model_dump(), ensure_ascii=False).lower()
+    assert result.prompt_text == ""
+    assert "bucket.example" not in dumped
+    assert "awsaccesskeyid" not in dumped
+    assert "signature" not in dumped
+    assert "x-amz-signature" not in dumped
+
+
 def test_attachment_rejects_unallowed_host(tmp_path):
     provider = FakeAttachmentProvider(
         AttachmentProcessingResult(context_text="must not run", processed_count=1)

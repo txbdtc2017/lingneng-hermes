@@ -51,6 +51,7 @@ _LOCAL_ROOT_FRAGMENT_RE = re.compile(
 _FORBIDDEN_TEXT_PARTS = (
     "api_key",
     "authorization",
+    "awsaccesskeyid",
     "bearer ",
     "credential",
     "password",
@@ -59,9 +60,14 @@ _FORBIDDEN_TEXT_PARTS = (
     "raw request",
     "secret",
     "signed url",
+    "signature=",
     "token",
     "traceback",
     "exception",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-amz-signature",
+    "x-oss-signature",
 )
 _PUBLIC_WARNING_CODES = frozenset(
     {

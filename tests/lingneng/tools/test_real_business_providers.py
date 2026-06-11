@@ -396,3 +396,177 @@ def test_document_generation_handler_accepts_legacy_content_aliases(tmp_path):
 
         assert result["success"] is True
         assert provider.request.content == expected_content
+
+
+def test_aigc_image_client_submits_expected_payload(tmp_path):
+    del tmp_path
+    from lingneng.tools.image_provider import AigcImageClient
+
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={"code": 200, "msg": "ok", "data": {"taskId": "task-img-1"}},
+        )
+
+    client = AigcImageClient(
+        base_url="https://aigc.example",
+        env="DEV",
+        timeout_seconds=3,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    task_id = client.submit_text_to_image(
+        prompt="火锅店海报",
+        size="1024x1024",
+        quality="standard",
+    )
+
+    assert task_id == "task-img-1"
+    assert captured["url"] == "https://aigc.example/api/aigc/image/text2img"
+    assert captured["body"] == {
+        "prompt": "火锅店海报",
+        "size": "1024x1024",
+        "quality": "standard",
+        "env": "DEV",
+    }
+
+
+def test_aigc_image_client_accepts_full_endpoint_url(tmp_path):
+    del tmp_path
+    from lingneng.tools.image_provider import AigcImageClient
+
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        return httpx.Response(200, json={"code": 200, "data": {"task_id": "task-img-1"}})
+
+    client = AigcImageClient(
+        base_url="https://aigc.example/api/aigc/image/text2img",
+        env="DEV",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    client.submit_text_to_image(prompt="海报", size="1024x1024", quality="standard")
+
+    assert urls == ["https://aigc.example/api/aigc/image/text2img"]
+
+
+def test_aigc_image_provider_returns_partial_success_artifacts(tmp_path):
+    from lingneng.tools.image_generation import ImageGenerationRequest
+    from lingneng.tools.image_provider import (
+        AigcImageGenerationProvider,
+        AigcMaterialTaskResult,
+    )
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str]] = []
+            self.task_ids = ["task-ok", "task-error"]
+
+        def submit_text_to_image(self, *, prompt: str, size: str, quality: str) -> str:
+            self.calls.append({"prompt": prompt, "size": size, "quality": quality})
+            return self.task_ids.pop(0)
+
+    class FakeStore:
+        def wait(
+            self,
+            task_id: str,
+            *,
+            timeout_seconds: float,
+            poll_interval_seconds: float,
+        ) -> AigcMaterialTaskResult:
+            del timeout_seconds, poll_interval_seconds
+            if task_id == "task-ok":
+                return AigcMaterialTaskResult(
+                    task_id=task_id,
+                    status="success",
+                    task_type="IMAGE",
+                    material_urls=["https://files.example/generated.png"],
+                )
+            return AigcMaterialTaskResult(
+                task_id=task_id,
+                status="error",
+                task_type="IMAGE",
+                msg="failed",
+            )
+
+    fake_client = FakeClient()
+    provider = AigcImageGenerationProvider(
+        settings(tmp_path),
+        client=fake_client,
+        result_store=FakeStore(),
+    )
+
+    result = provider.generate(
+        ImageGenerationRequest(prompt="海报", count=2, size="", quality="", style="")
+    )
+
+    assert fake_client.calls == [
+        {"prompt": "海报", "size": "1024x1024", "quality": "standard"},
+        {"prompt": "海报", "size": "1024x1024", "quality": "standard"},
+    ]
+    assert result.artifacts[0]["artifact_type"] == "image"
+    assert result.artifacts[0]["source"] == "image_generation"
+    assert result.artifacts[0]["object_key"] == "external/aigc-image/task-ok/1"
+    assert result.safe_output["requested_count"] == 2
+    assert result.safe_output["succeeded_count"] == 1
+    assert result.safe_output["failed_count"] == 1
+
+
+def test_chart_provider_delegates_to_image_provider_and_rewrites_source(tmp_path):
+    from lingneng.tools.chart_provider import ChartImageGenerationProvider
+    from lingneng.tools.chart_visualization import ChartVisualizationRequest
+
+    class FakeImageProvider:
+        def __init__(self) -> None:
+            self.request = None
+
+        def generate(self, request):
+            self.request = request
+            return {
+                "summary": "图片生成完成",
+                "safe_output": {
+                    "requested_count": 1,
+                    "succeeded_count": 1,
+                    "failed_count": 0,
+                },
+                "artifacts": [
+                    {
+                        "artifact_id": "artifact-img-1",
+                        "artifact_type": "image",
+                        "source": "image_generation",
+                        "file_name": "generated-image-1.png",
+                        "mime_type": "image/png",
+                        "url": "https://files.example/chart.png",
+                        "object_key": "external/aigc-image/task-chart/1",
+                        "format": "png",
+                        "target_format": "png",
+                        "conversion_required": False,
+                        "conversion_owner": None,
+                    }
+                ],
+            }
+
+    image_provider = FakeImageProvider()
+    cfg = settings(tmp_path)
+    provider = ChartImageGenerationProvider(settings=cfg, image_provider=image_provider)
+
+    result = provider.generate(
+        ChartVisualizationRequest(
+            instruction="生成趋势图",
+            title="收入趋势",
+            chart_type="line",
+            data_summary="Jan=10, Feb=20",
+        )
+    )
+
+    assert "收入趋势" in image_provider.request.prompt
+    assert "line" in image_provider.request.prompt
+    assert result.artifacts[0]["source"] == "chart_visualization"
+    assert result.artifacts[0]["file_name"] == "收入趋势-1.png"
+    assert result.safe_output["chart_type"] == "line"

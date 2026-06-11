@@ -11,6 +11,7 @@ import httpx
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.schemas.chat_request import AttachmentPayload
+from lingneng.tools.artifacts import stable_percent_decode
 from lingneng.tools.attachments import (
     AttachmentProcessingRequest,
     AttachmentProcessingResult,
@@ -42,7 +43,8 @@ _FORBIDDEN_TEXT_PARTS = (
     "secret",
     "signed url",
     "signature=",
-    "token",
+    "token:",
+    "token=",
     "traceback",
     "exception",
     "x-amz-credential",
@@ -384,22 +386,27 @@ def _snippet(value: str) -> str:
 
 
 def _safe_display_name(value: str) -> str:
-    clean = _CONTROL_CHAR_RE.sub("", value).strip()
-    if not clean or _has_forbidden_public_text(clean):
+    clean = _safe_public_text(value)
+    if not clean:
         return "attachment"
     return clean[:160]
 
 
 def _safe_mime_display(value: str) -> str:
-    clean = _mime_type(_CONTROL_CHAR_RE.sub("", value))
-    if not clean or _has_forbidden_public_text(clean):
+    clean = _safe_public_text(_mime_type(value))
+    if not clean:
         return "application/octet-stream"
     return clean[:100]
 
 
 def _safe_public_text(value: str) -> str:
     clean = _CONTROL_CHAR_RE.sub("", value).strip()
-    if _has_forbidden_public_text(clean):
+    decoded, decode_stable = stable_percent_decode(clean)
+    if (
+        not decode_stable
+        or _has_forbidden_public_text(clean)
+        or _has_forbidden_public_text(decoded)
+    ):
         return ""
     return clean
 

@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import lingneng.tools.attachment_http_provider as http_provider_module
 import lingneng.tools.attachment_local_text_provider as local_text_provider_module
+import pytest
 
 from lingneng.config.settings import LingNengSettings
 from lingneng.tools.attachment_http_provider import (
@@ -555,6 +556,33 @@ def test_local_text_provider_downloads_text_and_selects_relevant_chunks(tmp_path
     assert "history content marker" not in result.context_text
 
 
+def test_local_text_provider_selects_chunk_with_business_token_query(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        body = ("无关内容 " * 120) + "token 用量趋势显著上升，需关注套餐消耗。\n"
+        return httpx.Response(200, content=body.encode("utf-8"))
+
+    request = attachment_request()
+    request.attachments[0].file_name = "usage.txt"
+    request.attachments[0].mime_type = "text/plain"
+    request.attachments[0].download_url = "https://files.example.test/usage.txt"
+    request.query = "请分析 token 用量趋势"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(
+            tmp_path,
+            LINGNENG_ATTACHMENT_CHUNK_SIZE="500",
+            LINGNENG_ATTACHMENT_CHUNK_OVERLAP="0",
+            LINGNENG_ATTACHMENT_SELECTED_CHUNK_LIMIT="1",
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "succeeded"
+    assert "token 用量趋势" in result.context_text
+
+
 def test_local_text_provider_formats_csv_rows(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         del request
@@ -726,3 +754,133 @@ def test_local_text_provider_default_client_disables_redirects_and_trust_env(
     assert captured["exited"] == 2
     assert chunk_sizes == [65536]
     assert result.status == "succeeded"
+
+
+def test_local_text_provider_percent_decodes_before_public_text_checks(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            content=(
+                "公开说明\n"
+                "api%5Fkey%3Dabc123\n"
+                "%2FUsers%2Frotas%2Fprivate\n"
+            ).encode("utf-8"),
+        )
+
+    request = attachment_request()
+    request.attachments[0].file_name = "notes.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    dumped = result.model_dump_json().lower()
+    assert "api%5fkey%3dabc123" not in dumped
+    assert "%2fusers%2frotas%2fprivate" not in dumped
+    assert "abc123" not in dumped
+    assert "/users/rotas/private" not in dumped
+
+
+def test_local_text_provider_maps_timeout_to_public_code(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        raise httpx.TimeoutException("secret-token /Users/rotas/private")
+
+    request = attachment_request()
+    request.attachments[0].file_name = "notes.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+    dumped = result.model_dump_json()
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_TIMEOUT"
+    assert "secret-token" not in dumped
+    assert "/Users/rotas" not in dumped
+
+
+def test_local_text_provider_maps_non_2xx_to_public_error(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(500, text="secret-token /Users/rotas/private")
+
+    request = attachment_request()
+    request.attachments[0].file_name = "notes.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+    dumped = result.model_dump_json()
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_ERROR"
+    assert result.context_text == ""
+    assert "secret-token" not in dumped
+    assert "/Users/rotas" not in dumped
+
+
+def test_local_text_provider_rejects_invalid_content_length(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            content=b"notes",
+            headers={"content-length": "not-a-number"},
+        )
+
+    request = attachment_request()
+    request.attachments[0].file_name = "notes.txt"
+    request.attachments[0].mime_type = "text/plain"
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
+    assert result.context_text == ""
+
+
+@pytest.mark.parametrize(
+    "file_name,mime_type,body",
+    [
+        ("empty.txt", "text/plain", b""),
+        ("empty.csv", "text/csv", b",,\n,,\n"),
+    ],
+)
+def test_local_text_provider_rejects_empty_text_without_leaks(
+    tmp_path,
+    file_name,
+    mime_type,
+    body,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, content=body)
+
+    request = attachment_request()
+    request.attachments[0].file_name = file_name
+    request.attachments[0].mime_type = mime_type
+    provider = LocalTextAttachmentProcessingProvider(
+        settings(tmp_path),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.process(request)
+
+    assert result.status == "failed"
+    assert result.code == "ATTACHMENT_PROVIDER_INVALID_RESULT"
+    assert result.context_text == ""

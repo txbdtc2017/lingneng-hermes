@@ -69,6 +69,22 @@ _FORBIDDEN_TEXT_PARTS = (
     "x-amz-signature",
     "x-oss-signature",
 )
+_QUERY_URL_SENSITIVE_PARTS = (
+    "api_key",
+    "authorization",
+    "awsaccesskeyid",
+    "bearer ",
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "signature=",
+    "token=",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "x-amz-signature",
+    "x-oss-signature",
+)
 _PUBLIC_WARNING_CODES = frozenset(
     {
         "ATTACHMENT_CONTEXT_TRUNCATED",
@@ -428,7 +444,25 @@ def _bounded_context_text(value: str, *, max_chars: int) -> tuple[str, bool]:
 
 
 def _bounded_query(value: str) -> str:
-    return _sanitize_prompt_text(value)[:2000]
+    return _sanitize_query_text(value)[:2000]
+
+
+def _sanitize_query_text(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
+    clean_text = _CONTROL_CHAR_RE.sub("", value).strip()
+    decoded, decode_stable = stable_percent_decode(clean_text)
+    if (
+        not decode_stable
+        or _looks_like_local_path(clean_text)
+        or _looks_like_local_path(decoded)
+        or _contains_embedded_local_path(clean_text)
+        or _contains_embedded_local_path(decoded)
+        or _contains_sensitive_url(clean_text)
+        or _contains_sensitive_url(decoded)
+    ):
+        return ""
+    return clean_text
 
 
 def _sanitize_prompt_text(value: str) -> str:
@@ -612,4 +646,12 @@ def _contains_embedded_local_path(value: str) -> bool:
         or "local://" in lowered
         or _LOCAL_ROOT_FRAGMENT_RE.search(value) is not None
         or _WINDOWS_ABSOLUTE_PATH_RE.search(value) is not None
+    )
+
+
+def _contains_sensitive_url(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        ("http://" in lowered or "https://" in lowered)
+        and any(part in lowered for part in _QUERY_URL_SENSITIVE_PARTS)
     )

@@ -570,3 +570,54 @@ def test_phase_5_settings_reject_values_below_spec_minimums(
 ):
     with pytest.raises(ValidationError):
         LingNengSettings.from_env({env_name: invalid_value})
+
+
+def test_phase_15_training_boundary_settings_default_to_old_service(tmp_path):
+    settings = LingNengSettings.from_env({"LINGNENG_RUNTIME_DIR": str(tmp_path)})
+
+    assert settings.training_mode == "old_service"
+    assert settings.training_worker_enabled is False
+    assert settings.training_owner == "old_lingnengai"
+    assert settings.training_query_source == "external_rag_provider"
+
+
+def test_phase_15_training_boundary_settings_can_disable_training(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_TRAINING_MODE": "disabled",
+        }
+    )
+
+    assert settings.training_mode == "disabled"
+    assert settings.training_worker_enabled is False
+    assert settings.training_owner == "disabled"
+    assert settings.training_query_source == "external_rag_provider"
+
+
+def test_phase_15_training_boundary_rejects_hermes_mode_until_full_migration():
+    with pytest.raises(ValidationError):
+        LingNengSettings.from_env({"LINGNENG_TRAINING_MODE": "hermes"})
+
+
+def test_phase_15_training_ready_summary_is_secret_safe(tmp_path):
+    settings = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve?token=secret-token",
+            "LINGNENG_RAG_API_KEY": "secret-rag-key",
+            "LINGNENG_TRAINING_MODE": "old_service",
+        }
+    )
+
+    summary = settings.ready_summary()
+
+    assert summary["training_mode"] == "old_service"
+    assert summary["training_owner"] == "old_lingnengai"
+    assert summary["training_worker_enabled"] is False
+    assert summary["training_query_source"] == "external_rag_provider"
+    dumped = repr(summary)
+    assert "secret-rag-key" not in dumped
+    assert "secret-token" not in dumped
+    assert "rag.example.test" not in dumped
+    assert "rag_endpoint" not in summary

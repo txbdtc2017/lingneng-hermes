@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _LOCAL_ENVS = {"local", "dev", "test"}
 AgentMode = Literal["fake", "hermes"]
+TrainingMode = Literal["old_service", "disabled"]
 
 
 def _bool_from_env(value: str | None, default: bool = False) -> bool:
@@ -58,6 +59,7 @@ class LingNengSettings(BaseModel):
     session_db_path: Path | None = None
     route_pending_db_path: Path | None = None
     agent_mode: AgentMode = "fake"
+    training_mode: TrainingMode = "old_service"
     internal_api_key: str = Field(default="", repr=False)
     allow_insecure_local: bool = False
     session_retention_days: int = 90
@@ -166,6 +168,7 @@ class LingNengSettings(BaseModel):
             if route_pending_value
             else None,
             agent_mode=source.get("LINGNENG_AGENT_MODE", "fake"),
+            training_mode=source.get("LINGNENG_TRAINING_MODE", "old_service"),
             internal_api_key=source.get("LINGNENG_INTERNAL_API_KEY", ""),
             allow_insecure_local=_bool_from_env(
                 source.get("LINGNENG_ALLOW_INSECURE_LOCAL"), False
@@ -431,6 +434,20 @@ class LingNengSettings(BaseModel):
             or self.attachment_local_text_provider_configured
         )
 
+    @property
+    def training_worker_enabled(self) -> bool:
+        return False
+
+    @property
+    def training_owner(self) -> str:
+        if self.training_mode == "old_service":
+            return "old_lingnengai"
+        return "disabled"
+
+    @property
+    def training_query_source(self) -> str:
+        return "external_rag_provider"
+
     def ready_summary(self) -> dict[str, object]:
         return {
             "status": "ready"
@@ -438,6 +455,10 @@ class LingNengSettings(BaseModel):
             else "not_ready",
             "app_env": self.app_env,
             "agent_mode": self.agent_mode,
+            "training_mode": self.training_mode,
+            "training_owner": self.training_owner,
+            "training_worker_enabled": self.training_worker_enabled,
+            "training_query_source": self.training_query_source,
             "runtime_dir": str(self.runtime_dir),
             "session_db_path": str(self.session_db_path),
             "route_pending_db_path": str(self.route_pending_db_path),

@@ -1267,3 +1267,105 @@ def test_retrieve_rag_http_provider_uses_endpoint_without_live_network(
     assert calls[1]["headers"] == {"Authorization": "Bearer secret-rag-key"}
     assert calls[1]["json"]["query"] == "需要资料"
     assert calls[1]["json"]["tenant_id"] == "tenant-a"
+
+
+def test_retrieve_rag_keeps_querying_external_provider_when_training_owner_is_old_service(
+    tmp_path,
+):
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "context": "旧培训服务已经入库的知识。",
+                "citations": [{"chunk_id": "chunk-old", "score": 0.9}],
+            },
+        )
+
+    settings_obj = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_TRAINING_MODE": "old_service",
+            "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve",
+        }
+    )
+    provider = HttpRagProvider(
+        settings_obj,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.retrieve(
+        RagRetrieveRequest(
+            query="培训后的知识能查吗",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            employee_type="marketing_content_creator",
+            conversation_id="conv-a",
+            session_key="tenant-a:user-a:emp-001:conv-a",
+            request_id="req-001",
+            top_k=3,
+            filters={},
+        )
+    )
+
+    assert settings_obj.training_owner == "old_lingnengai"
+    assert settings_obj.training_worker_enabled is False
+    assert captured["body"]["query"] == "培训后的知识能查吗"
+    assert captured["body"]["tenant_id"] == "tenant-a"
+    assert "training_mode" not in captured["body"]
+    assert "training_owner" not in captured["body"]
+    assert result.status == "hit"
+    assert result.context == "旧培训服务已经入库的知识。"
+
+
+def test_retrieve_rag_query_path_still_uses_external_provider_when_training_disabled(
+    tmp_path,
+):
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "status": "empty",
+                "context": "",
+                "citations": [],
+                "metadata": {"retrieval_status": "empty"},
+            },
+        )
+
+    settings_obj = LingNengSettings.from_env(
+        {
+            "LINGNENG_RUNTIME_DIR": str(tmp_path),
+            "LINGNENG_TRAINING_MODE": "disabled",
+            "LINGNENG_RAG_ENDPOINT": "https://rag.example.test/retrieve",
+        }
+    )
+    provider = HttpRagProvider(
+        settings_obj,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = provider.retrieve(
+        RagRetrieveRequest(
+            query="没有新增培训时仍可查询已有知识",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            employee_type="marketing_content_creator",
+            conversation_id="conv-a",
+            session_key="tenant-a:user-a:emp-001:conv-a",
+            request_id="req-001",
+            top_k=3,
+            filters={},
+        )
+    )
+
+    assert settings_obj.training_owner == "disabled"
+    assert settings_obj.training_worker_enabled is False
+    assert captured["body"]["query"] == "没有新增培训时仍可查询已有知识"
+    assert "training_mode" not in captured["body"]
+    assert "training_owner" not in captured["body"]
+    assert result.status == "empty"

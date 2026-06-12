@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal, Mapping, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -167,8 +167,11 @@ class LingNengSettings(BaseModel):
             route_pending_db_path=Path(route_pending_value)
             if route_pending_value
             else None,
-            agent_mode=source.get("LINGNENG_AGENT_MODE", "fake"),
-            training_mode=source.get("LINGNENG_TRAINING_MODE", "old_service"),
+            agent_mode=cast(AgentMode, source.get("LINGNENG_AGENT_MODE", "fake")),
+            training_mode=cast(
+                TrainingMode,
+                source.get("LINGNENG_TRAINING_MODE", "old_service"),
+            ),
             internal_api_key=source.get("LINGNENG_INTERNAL_API_KEY", ""),
             allow_insecure_local=_bool_from_env(
                 source.get("LINGNENG_ALLOW_INSECURE_LOCAL"), False

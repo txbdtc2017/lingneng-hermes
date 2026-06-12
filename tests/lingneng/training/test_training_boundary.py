@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -29,18 +30,25 @@ def test_phase_15_does_not_add_hermes_training_pipeline_package():
 
 
 def test_phase_15_runtime_does_not_import_old_lingnengai_app_modules():
-    runtime_files = list((ROOT / "lingneng").rglob("*.py"))
+    runtime_files = sorted((ROOT / "lingneng").rglob("*.py"))
     assert runtime_files
 
     offenders: list[str] = []
-    forbidden_fragments = (
-        "from " + "app.",
-        "import " + "app.",
-        "/Users/rotas/Documents/work/hailun/LingNengAI" + "/app",
-    )
+    old_app_path = "/Users/rotas/Documents/work/hailun/LingNengAI" + "/app"
     for path in runtime_files:
         text = path.read_text(encoding="utf-8")
-        if any(fragment in text for fragment in forbidden_fragments):
-            offenders.append(str(path.relative_to(ROOT)))
+        tree = ast.parse(text, filename=str(path))
+        relative_path = path.relative_to(ROOT)
+        if old_app_path in text:
+            offenders.append(f"{relative_path}:old_app_path")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "app" or alias.name.startswith("app."):
+                        offenders.append(f"{relative_path}:{node.lineno}")
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module == "app" or module.startswith("app."):
+                    offenders.append(f"{relative_path}:{node.lineno}")
 
     assert offenders == []

@@ -33,6 +33,7 @@ REQUIRED_PACKAGES = {
     "image-generation",
     "chart-visualization",
     "report-formatting",
+    "employee-answer-semantics-contract",
     "artifact-output-contract",
     "business-answer-contract",
     "rag-citation-contract",
@@ -171,7 +172,7 @@ def test_catalog_default_list_includes_all_bundled_skill_kinds_in_order(tmp_path
     items = catalog.list_skills(limit=50)
 
     names = [item.package_name for item in items]
-    assert len(items) == 24
+    assert len(items) == 25
     assert set(names) == REQUIRED_PACKAGES
     assert "artifact-output-contract" in names
     assert "business-answer-contract" in names

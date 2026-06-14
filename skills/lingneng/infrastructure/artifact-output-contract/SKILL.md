@@ -25,10 +25,14 @@ metadata:
 ## Runtime Contract
 
 工具调用前必须准备完整输入；工具返回后文本答案应说明 artifact 用途和关键内容。
+只有真实 artifact 结果才能声明文件、图片或图表已生成。
+只有收到 `artifact_created` 或等价 artifact 元数据后，才可以在最终回答中确认生成成功。
 
 ## Constraints
 
 不要把未生成的文件说成已生成；不要暴露本地绝对路径或内部临时文件路径。
+没有 `artifact_created` 时不要声称生成成功；可以提供可复制正文、提示词、图表数据或后续生成建议。
+不要编造文件名、下载链接、对象存储 key、图片尺寸或图表地址。
 
 ## Failure Handling
 

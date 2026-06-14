@@ -327,19 +327,15 @@ def _compact_fixed_prompt_text(
     warnings: list[SkillPromptWarning],
 ) -> str:
     sections: list[str] = []
-    for fragment in infrastructure_fragments:
+    if infrastructure_fragments:
+        summaries = _compact_infrastructure_contract_summaries(
+            infrastructure_fragments
+        )
         sections.append(
             "\n".join(
                 [
-                    f"### Infrastructure Skill: {fragment.package_name}",
-                    (
-                        "Employee Handoff Guidance: use employee_handoff "
-                        "action=suggest when another employee fits; "
-                        "action=confirm for 2-4 ambiguous choices; reply with "
-                        "public_reply after terminal suggest/confirm; never "
-                        "invent employee types, names, thresholds, or private "
-                        "reasons."
-                    ),
+                    "### Infrastructure Contract Compact",
+                    *summaries,
                 ]
             )
         )
@@ -363,6 +359,49 @@ def _compact_fixed_prompt_text(
         )
     )
     return "## LingNeng Skill Context\n\n" + "\n\n".join(sections)
+
+
+def _compact_infrastructure_contract_summaries(
+    infrastructure_fragments: list[SkillPromptFragment],
+) -> list[str]:
+    summaries_by_package = {
+        "employee-answer-semantics-contract": (
+            "- employee answer: current employee role; use employee_handoff "
+            "when needed; never invent employee routing."
+        ),
+        "business-answer-contract": (
+            "- business answer: direct conclusion, action steps, data gaps; "
+            "no fabricated business data."
+        ),
+        "tool-observation-contract": (
+            "- tool observation: only observed tool results; unavailable "
+            "tools require degraded text answer; hidden/unlisted tools are "
+            "not authorized."
+        ),
+        "artifact-output-contract": (
+            "- artifact: declare generated only after real artifact metadata; "
+            "no fabricated file/link/key."
+        ),
+        "rag-citation-contract": (
+            "- RAG citation: internal training/history cases prefer "
+            "retrieve_rag; live public facts use web_search; no fabricated "
+            "citations/files/clauses."
+        ),
+        "lingneng-employee-handoff-guidance": (
+            "- handoff terminal: after suggest/confirm, reply with public_reply."
+        ),
+    }
+    summaries = [
+        summary
+        for fragment in infrastructure_fragments
+        if (summary := summaries_by_package.get(fragment.package_name))
+    ]
+    if summaries:
+        return summaries
+    return [
+        "- employee answer: current employee role; use employee_handoff "
+        "when needed; never invent employee routing."
+    ]
 
 
 def _bounded_prompt_text(text: str, max_chars: int) -> str:

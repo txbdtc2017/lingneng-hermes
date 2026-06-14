@@ -22,6 +22,14 @@ EMPLOYEE_BASE_SKILL_BY_TYPE = {
     "member_operator": "employee-member-operator",
 }
 
+INFRASTRUCTURE_CONTRACT_PACKAGES = (
+    "employee-answer-semantics-contract",
+    "business-answer-contract",
+    "tool-observation-contract",
+    "artifact-output-contract",
+    "rag-citation-contract",
+)
+
 
 class LingNengSkillLoader:
     def __init__(self, settings: LingNengSettings) -> None:
@@ -38,7 +46,10 @@ class LingNengSkillLoader:
         return SkillPromptContext(
             employee_base=employee_base,
             selected_skill=selected_skill,
-            infrastructure_fragments=[_handoff_guidance_fragment()],
+            infrastructure_fragments=[
+                *self._infrastructure_contract_fragments(packages, warnings),
+                _handoff_guidance_fragment(),
+            ],
             warnings=warnings,
             prompt_max_chars=self.settings.skill_prompt_max_chars,
         )
@@ -107,6 +118,35 @@ class LingNengSkillLoader:
             )
             return None
         return self._fragment(package)
+
+    def _infrastructure_contract_fragments(
+        self,
+        packages: dict[str, LoadedSkillPackage],
+        warnings: list[SkillPromptWarning],
+    ) -> list[SkillPromptFragment]:
+        fragments: list[SkillPromptFragment] = []
+        for package_name in INFRASTRUCTURE_CONTRACT_PACKAGES:
+            package = packages.get(package_name)
+            if package is None:
+                warnings.append(
+                    SkillPromptWarning(
+                        code="INFRASTRUCTURE_CONTRACT_NOT_FOUND",
+                        message="Configured roots do not contain this infrastructure contract.",
+                        package_name=package_name,
+                    )
+                )
+                continue
+            if package.metadata.lingneng.kind is not SkillKind.INFRASTRUCTURE:
+                warnings.append(
+                    SkillPromptWarning(
+                        code="INFRASTRUCTURE_CONTRACT_INVALID",
+                        message="Infrastructure contract package kind must be infrastructure.",
+                        package_name=package_name,
+                    )
+                )
+                continue
+            fragments.append(self._fragment(package))
+        return fragments
 
     def _fragment(self, package: LoadedSkillPackage) -> SkillPromptFragment:
         excerpt, truncated = _bounded_excerpt(

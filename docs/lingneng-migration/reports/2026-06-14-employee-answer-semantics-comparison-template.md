@@ -12,6 +12,17 @@ Live checks are disabled unless:
 LINGNENG_EMPLOYEE_SEMANTICS_LIVE_TEST_ENABLED=true
 ```
 
+Run the opt-in live acceptance check with:
+
+```bash
+LINGNENG_EMPLOYEE_SEMANTICS_LIVE_TEST_ENABLED=true \
+uv run --extra dev python -m pytest tests/lingneng/integration/test_employee_semantics_live.py -q
+```
+
+This live test requires a configured Hermes model provider. It verifies the
+Java-compatible SSE flow and representative employee semantics cases, but it
+does not compare exact LLM wording.
+
 ## Case Table
 
 | Case id | Employee | Scenario | Status | Notes |

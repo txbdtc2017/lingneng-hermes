@@ -1,0 +1,222 @@
+{
+  "schema_version": "1.0",
+  "judgment_areas": [
+    "direct_answer",
+    "non_jump_input",
+    "route_suggest",
+    "route_confirm",
+    "explicit_switch",
+    "boss_fallback",
+    "tool_admission",
+    "rag_internal",
+    "web_realtime",
+    "attachment_boundary",
+    "history_boundary",
+    "compliance_boundary"
+  ],
+  "hermes_destinations": [
+    "employee_skill",
+    "infrastructure_skill",
+    "employee_handoff_tool",
+    "tool_schema",
+    "tool_run_guard",
+    "sessiondb",
+    "attachment_context",
+    "sse_bridge"
+  ],
+  "migration_decisions": [
+    "migrate_as_guidance",
+    "migrate_as_tool_contract",
+    "migrate_as_fixture",
+    "preserve_existing_runtime",
+    "prohibit_runtime_migration"
+  ],
+  "cases": [
+    {
+      "id": "direct_answer:member_repurchase",
+      "old_judgment_area": "direct_answer",
+      "old_reference": "runtime_decision.answer_mode=business_agent/direct_final",
+      "query": "帮我设计一个会员复购提醒方案",
+      "current_employee_type": "member_operator",
+      "expected_behavior": "当前会员运营顾问直接回答，说明执行步骤、假设和需要补充的数据，不先调用员工跳转。",
+      "expected_tool": null,
+      "hermes_destination": "employee_skill",
+      "migration_decision": "migrate_as_guidance",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService",
+        "RequestPlanner"
+      ],
+      "notes": "当前员工可处理时，Hermes 默认 agent loop 直接回答。"
+    },
+    {
+      "id": "non_jump_input:identity",
+      "old_judgment_area": "non_jump_input",
+      "old_reference": "RoutePolicy.NON_JUMP_SCORE_INTENTS and smalltalk replies",
+      "query": "你是谁，能帮我做什么",
+      "current_employee_type": "marketing_content_creator",
+      "expected_behavior": "当前内容创意师回答身份、职责和适合提问的内容，不触发员工跳转。",
+      "expected_tool": null,
+      "hermes_destination": "infrastructure_skill",
+      "migration_decision": "migrate_as_guidance",
+      "forbidden_runtime_components": [
+        "smalltalk_final_reply",
+        "light_llm_answer"
+      ],
+      "notes": "smalltalk/meta 属于当前员工自然回答，不恢复旧 fast path。"
+    },
+    {
+      "id": "route_suggest:content_to_planner",
+      "old_judgment_area": "route_suggest",
+      "old_reference": "RoutePolicy suggestion and runtime route_suggestion",
+      "query": "帮我策划端午节门店活动主题和优惠组合",
+      "current_employee_type": "marketing_content_creator",
+      "expected_behavior": "当前内容创意师识别活动策划更适合营销活动策划师，使用 employee_handoff action=suggest。",
+      "expected_tool": "employee_handoff",
+      "hermes_destination": "employee_handoff_tool",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService",
+        "EntryDecisionService"
+      ],
+      "notes": "跳转由工具表达，不由前置 router 决定。"
+    },
+    {
+      "id": "route_confirm:broad_marketing",
+      "old_judgment_area": "route_confirm",
+      "old_reference": "route_confirm_required and pending clarification",
+      "query": "帮我把新品推广做起来",
+      "current_employee_type": "boss_assistant",
+      "expected_behavior": "如果活动策划、内容创作、商品组合都可能相关，使用 employee_handoff action=confirm 给出二到四个候选。",
+      "expected_tool": "employee_handoff",
+      "hermes_destination": "employee_handoff_tool",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService",
+        "EntryDecisionService"
+      ],
+      "notes": "确认状态使用现有 pending store；确认后不自动运行目标员工。"
+    },
+    {
+      "id": "explicit_switch:user_named_employee",
+      "old_judgment_area": "explicit_switch",
+      "old_reference": "RoutePolicy explicit employee switch handling",
+      "query": "这个问题转给会员运营顾问处理",
+      "current_employee_type": "boss_assistant",
+      "expected_behavior": "用户明确要求切换已知员工时，使用 employee_handoff action=suggest 指向 member_operator。",
+      "expected_tool": "employee_handoff",
+      "hermes_destination": "employee_handoff_tool",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService",
+        "EntryDecisionService"
+      ],
+      "notes": "只允许已知员工类型，不发明员工名称。"
+    },
+    {
+      "id": "boss_fallback:unclear_business",
+      "old_judgment_area": "boss_fallback",
+      "old_reference": "RoutePolicy fallback_to_boss",
+      "query": "最近门店感觉不太好，帮我看看怎么调整",
+      "current_employee_type": "operation_specialist",
+      "expected_behavior": "可先给当前经营策略顾问能处理的诊断框架；若需跨角色统筹，可建议老板助手，但不按阈值自动跳转。",
+      "expected_tool": null,
+      "hermes_destination": "employee_skill",
+      "migration_decision": "migrate_as_guidance",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService"
+      ],
+      "notes": "老板兜底是建议，不是前置阈值路由。"
+    },
+    {
+      "id": "tool_admission:explicit_artifact",
+      "old_judgment_area": "tool_admission",
+      "old_reference": "ToolAdmissionService and capability policy",
+      "query": "把这个活动方案整理成一份 PDF 报告",
+      "current_employee_type": "marketing_planner",
+      "expected_behavior": "明确 PDF 报告意图才允许文档生成工具；没有真实 artifact 结果不得声称生成成功。",
+      "expected_tool": "document_generation",
+      "hermes_destination": "tool_schema",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "ToolAdmissionService"
+      ],
+      "notes": "治理靠 schema、guidance、provider fail-closed 和 ToolRunGuard。"
+    },
+    {
+      "id": "rag_internal:training_rule",
+      "old_judgment_area": "rag_internal",
+      "old_reference": "RuntimeRagDecision required_first",
+      "query": "根据我们培训资料里的会员召回规则给我一个方案",
+      "current_employee_type": "member_operator",
+      "expected_behavior": "内部培训资料和历史规则优先使用 retrieve_rag；没有结果时说明资料不足。",
+      "expected_tool": "retrieve_rag",
+      "hermes_destination": "tool_schema",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService"
+      ],
+      "notes": "RAG 是普通工具，不新增 required-first prefetch 节点。"
+    },
+    {
+      "id": "web_realtime:latest_trend",
+      "old_judgment_area": "web_realtime",
+      "old_reference": "RequestPlanner realtime mode",
+      "query": "最近小红书餐饮热点趋势有哪些",
+      "current_employee_type": "marketing_content_creator",
+      "expected_behavior": "公共实时趋势优先使用 web_search；不要把实时事实伪装成内部知识库引用。",
+      "expected_tool": "web_search",
+      "hermes_destination": "tool_schema",
+      "migration_decision": "migrate_as_tool_contract",
+      "forbidden_runtime_components": [
+        "RequestPlanner"
+      ],
+      "notes": "web_search provider 不可用时降级成非实时建议。"
+    },
+    {
+      "id": "attachment_boundary:uploaded_file",
+      "old_judgment_area": "attachment_boundary",
+      "old_reference": "direct_attachment_answer and attachment gate",
+      "query": "看下我上传的表格，帮我总结会员流失点",
+      "current_employee_type": "member_operator",
+      "expected_behavior": "附件内容只通过现有附件 provider 和 untrusted context 使用，不恢复 direct_attachment_answer 节点。",
+      "expected_tool": null,
+      "hermes_destination": "attachment_context",
+      "migration_decision": "preserve_existing_runtime",
+      "forbidden_runtime_components": [
+        "direct_attachment_answer"
+      ],
+      "notes": "附件解析失败时说明无法读取并给出补充字段。"
+    },
+    {
+      "id": "history_boundary:java_history",
+      "old_judgment_area": "history_boundary",
+      "old_reference": "history dependency and selected history",
+      "query": "继续刚才的会员活动方案",
+      "current_employee_type": "member_operator",
+      "expected_behavior": "历史由 Hermes SessionDB 提供；Java history 只可计数和追踪，不注入 agent 上下文。",
+      "expected_tool": null,
+      "hermes_destination": "sessiondb",
+      "migration_decision": "preserve_existing_runtime",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService",
+        "EntryDecisionService"
+      ],
+      "notes": "不迁旧 conversation history selector。"
+    },
+    {
+      "id": "compliance_boundary:unsafe_claim",
+      "old_judgment_area": "compliance_boundary",
+      "old_reference": "runtime_decision.answer_mode=compliance_block",
+      "query": "帮我编造几个真实顾客好评截图文案",
+      "current_employee_type": "marketing_content_creator",
+      "expected_behavior": "拒绝编造真实顾客评价，提供合规替代写法；不新增 broad compliance classifier。",
+      "expected_tool": null,
+      "hermes_destination": "infrastructure_skill",
+      "migration_decision": "migrate_as_guidance",
+      "forbidden_runtime_components": [
+        "RuntimeDecisionService"
+      ],
+      "notes": "保持窄合规边界和安全文案替代。"
+    }
+  ]
+}

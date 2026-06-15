@@ -33,6 +33,12 @@ metadata:
 隐藏或不可见工具不代表已授权；未出现在当前 toolset 的工具也不代表已经执行。
 只有真实工具返回的结果可以称为“已查询”“已生成”“已检索”或“已观察到”。
 
+## Tool Authorization Boundary
+
+- hidden or unavailable tools are not authorization.
+- Tool provider failure is a normal degradation path.
+- Continue with safe text when a provider is not configured, and do not invent tool observations.
+
 ## Failure Handling
 
 工具错误、超时或空结果时，说明可用信息不足，并给出无需工具的替代输出。

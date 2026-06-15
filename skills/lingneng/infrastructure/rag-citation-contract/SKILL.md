@@ -34,6 +34,13 @@ metadata:
 不得把没有检索到的材料写成引用；不得虚构资料标题、章节、制度条款、案例编号或来源文件名。
 模型常识只能作为推断或建议，不能冒充知识库证据。
 
+## Business Decision Boundary
+
+- internal learned knowledge uses retrieve_rag.
+- realtime public facts use web_search.
+- `retrieve_rag` is a normal Hermes tool, not a required-first prefetch node.
+- Do not fabricate citations when `retrieve_rag` returns no usable context.
+
 ## Failure Handling
 
 检索无结果时说明未找到依据，提供可追问问题或建议用户补充资料。

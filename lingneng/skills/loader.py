@@ -186,11 +186,13 @@ def _handoff_guidance_fragment() -> SkillPromptFragment:
         description="员工跳转工具使用边界",
         body_excerpt=(
             "## Employee Handoff Guidance\n"
-            "- Answer directly when current employee can handle; use read_skill/search_skills if boundaries unclear.\n"
-            "- No handoff for smalltalk, meta, or general tasks.\n"
-            "- Use employee_handoff action=suggest when another employee fits; action=confirm for 2-4 ambiguous choices.\n"
+            "- current employee answers in-scope requests directly.\n"
+            "- smalltalk/meta/general tasks do not trigger handoff.\n"
+            "- explicit user switch requests use employee_handoff suggest when the target employee is known.\n"
+            "- ambiguous ownership can use employee_handoff confirm for 2-4 known employee choices.\n"
+            "- boss fallback is guidance, not threshold routing.\n"
             "- After terminal suggest/confirm, reply with public_reply and stop this turn.\n"
-            "- Never invent employee types, names, thresholds, or private reasons."
+            "- No pre-agent router, hidden route scores, invented thresholds, or invented employee types."
         ),
         resource_manifest=SkillResourceManifest(),
         display_name="员工跳转指引",

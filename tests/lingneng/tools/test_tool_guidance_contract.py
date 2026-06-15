@@ -55,6 +55,25 @@ def test_tool_observation_contract_denies_hidden_or_unavailable_tools() -> None:
     assert "不得把模型猜测包装成工具观察结果" in body
 
 
+def test_business_decision_tool_governance_markers_are_explicit() -> None:
+    employee_body = _skill_body("employee-answer-semantics-contract")
+    artifact_body = _skill_body("artifact-output-contract")
+    rag_body = _skill_body("rag-citation-contract")
+    observation_body = _skill_body("tool-observation-contract")
+
+    assert "current employee answers in-scope requests directly" in employee_body
+    assert "smalltalk/meta/general tasks do not trigger handoff" in employee_body
+    assert "explicit user switch requests use employee_handoff suggest" in employee_body
+    assert "ambiguous ownership can use employee_handoff confirm" in employee_body
+    assert "boss fallback is guidance, not threshold routing" in employee_body
+    assert "No pre-agent router" in employee_body
+    assert "explicit deliverable intent" in artifact_body
+    assert "real artifact result" in artifact_body
+    assert "internal learned knowledge uses retrieve_rag" in rag_body
+    assert "realtime public facts use web_search" in rag_body
+    assert "hidden or unavailable tools are not authorization" in observation_body
+
+
 def test_contract_tools_are_lingneng_approved_only() -> None:
     for package in (
         "employee-answer-semantics-contract",

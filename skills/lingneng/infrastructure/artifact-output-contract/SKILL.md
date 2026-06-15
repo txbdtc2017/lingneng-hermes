@@ -34,6 +34,12 @@ metadata:
 没有 `artifact_created` 时不要声称生成成功；可以提供可复制正文、提示词、图表数据或后续生成建议。
 不要编造文件名、下载链接、对象存储 key、图片尺寸或图表地址。
 
+## Explicit Artifact Intent
+
+- Artifact tools require explicit deliverable intent such as file, PDF, Word, image, poster, chart, export, or download.
+- Do not claim a file, image, chart, or report was generated unless a real artifact result exists.
+- Advice, analysis, strategy, copy, or planning text alone is not a real artifact result.
+
 ## Failure Handling
 
 artifact 生成失败时，返回可复制的正文、提示词或图表数据摘要，并说明失败状态。

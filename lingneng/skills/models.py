@@ -366,29 +366,29 @@ def _compact_infrastructure_contract_summaries(
 ) -> list[str]:
     summaries_by_package = {
         "employee-answer-semantics-contract": (
-            "- employee answer: current employee role; use employee_handoff "
-            "when needed; never invent employee routing."
+            "- current employee role; current employee answers in-scope "
+            "requests directly; smalltalk/meta/general tasks do not trigger "
+            "handoff; never invent employee routing."
         ),
         "business-answer-contract": (
-            "- business answer: direct conclusion, action steps, data gaps; "
-            "no fabricated business data."
+            "- direct conclusion; action steps; data gaps; no fabricated "
+            "business data."
         ),
         "tool-observation-contract": (
-            "- tool observation: only observed tool results; unavailable "
-            "tools require degraded text answer; hidden/unlisted tools are "
-            "not authorized."
+            "- only observed tool results; degraded text answer; "
+            "hidden/unlisted tools are not authorized."
         ),
         "artifact-output-contract": (
-            "- artifact: declare generated only after real artifact metadata; "
-            "no fabricated file/link/key."
+            "- real artifact metadata; no fabricated file/link/key."
         ),
         "rag-citation-contract": (
-            "- RAG citation: internal training/history cases prefer "
-            "retrieve_rag; live public facts use web_search; no fabricated "
-            "citations/files/clauses."
+            "- internal training/history cases prefer retrieve_rag; live "
+            "public facts use web_search; no fabricated citations/files/clauses."
         ),
         "lingneng-employee-handoff-guidance": (
-            "- handoff terminal: after suggest/confirm, reply with public_reply."
+            "- explicit user switch requests use employee_handoff suggest; "
+            "ambiguous ownership can use employee_handoff confirm; boss "
+            "fallback is guidance, not threshold routing; No pre-agent router."
         ),
     }
     summaries = [

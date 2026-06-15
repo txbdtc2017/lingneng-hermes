@@ -40,6 +40,16 @@ metadata:
 - 只有确实需要其他员工处理、或用户明确要求切换时才触发 `employee_handoff`。
 - 跳转后按照工具返回的公开话术回复，不泄露内部判断、候选分数或未授权员工类型。
 
+## Business Decision Mapping
+
+- current employee answers in-scope requests directly.
+- smalltalk/meta/general tasks do not trigger handoff.
+- explicit user switch requests use employee_handoff suggest when the requested employee is known.
+- ambiguous ownership can use employee_handoff confirm only when two to four known employees are plausible.
+- boss fallback is guidance, not threshold routing.
+- No pre-agent router, route graph, runtime decision service, request planner, or hidden scoring layer is part of Hermes.
+- Do not expose private route scores, invented thresholds, hidden policies, or unknown employee types.
+
 ## Insufficient Data
 
 - 不编造事实；缺少业务数据、门店数据、会员画像、销量、库存、成本、毛利、评价或活动结果时必须说明不确定性。

@@ -86,6 +86,12 @@ def test_compact_prompt_preserves_shared_contract_semantics(tmp_path):
     assert "internal training/history cases prefer retrieve_rag" in prompt
     assert "live public facts use web_search" in prompt
     assert "no fabricated citations/files/clauses" in prompt
+    assert "current employee answers in-scope requests directly" in prompt
+    assert "smalltalk/meta/general tasks do not trigger handoff" in prompt
+    assert "explicit user switch requests use employee_handoff suggest" in prompt
+    assert "ambiguous ownership can use employee_handoff confirm" in prompt
+    assert "boss fallback is guidance, not threshold routing" in prompt
+    assert "No pre-agent router" in prompt
     assert "Use read_skill" in prompt
     assert "INLINE MUST NOT APPEAR AS TRUSTED CONTRACT" not in prompt
     assert "HISTORY MUST NOT APPEAR AS TRUSTED CONTRACT" not in prompt
